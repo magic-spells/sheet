@@ -1,0 +1,80 @@
+{
+	"name": "@magic-spells/sheet",
+	"version": "0.1.0",
+	"description": "Gesture-driven dialog sheets with spring physics, snap points, edge and card profiles.",
+	"author": "Cory Schulz",
+	"license": "MIT",
+	"type": "module",
+	"main": "dist/sheet.esm.js",
+	"module": "dist/sheet.esm.js",
+	"unpkg": "dist/sheet.min.js",
+	"jsdelivr": "dist/sheet.min.js",
+	"style": "dist/sheet.min.css",
+	"exports": {
+		".": {
+			"import": "./dist/sheet.esm.js",
+			"default": "./dist/sheet.esm.js"
+		},
+		"./css": "./dist/sheet.css",
+		"./css/min": "./dist/sheet.min.css"
+	},
+	"sideEffects": true,
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/magic-spells/sheet.git"
+	},
+	"homepage": "https://github.com/magic-spells/sheet#readme",
+	"bugs": {
+		"url": "https://github.com/magic-spells/sheet/issues"
+	},
+	"keywords": [
+		"sheet",
+		"bottom-sheet",
+		"side-sheet",
+		"dialog",
+		"spring",
+		"snap-points",
+		"web-components",
+		"custom-elements"
+	],
+	"files": [
+		"dist/",
+		"src/"
+	],
+	"scripts": {
+		"build": "NODE_ENV=production node scripts/build.mjs",
+		"dev": "NODE_ENV=development node scripts/build.mjs",
+		"serve": "NODE_ENV=development node scripts/build.mjs",
+		"test": "node --test test/",
+		"lint": "eslint src/ scripts/ test/",
+		"format": "prettier --write .",
+		"prepublishOnly": "npm run build"
+	},
+	"dependencies": {
+		"@magic-spells/frame-engine": "^1.0.1",
+		"@magic-spells/physics-engine": "^1.0.0"
+	},
+	"peerDependencies": {
+		"@magic-spells/dialog-panel": "^2.0.0"
+	},
+	"devDependencies": {
+		"@eslint/js": "^9.38.0",
+		"@magic-spells/dialog-panel": "^2.0.0",
+		"@magic-spells/vite-plugin-live-reload": "^0.1.0",
+		"eslint": "^9.38.0",
+		"globals": "^15.15.0",
+		"lightningcss": "^1.29.3",
+		"prettier": "^3.3.3",
+		"terser": "^5.16.0",
+		"vite": "^8.0.10"
+	},
+	"publishConfig": {
+		"access": "public",
+		"registry": "https://registry.npmjs.org/"
+	},
+	"browserslist": [
+		"last 2 versions",
+		"not dead",
+		"not ie <= 11"
+	]
+}

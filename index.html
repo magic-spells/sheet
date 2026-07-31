@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>@magic-spells/sheet</title>
+		<link rel="canonical" href="https://magic-spells.github.io/sheet/demo/" />
+		<meta http-equiv="refresh" content="0; url=./demo/" />
+		<!-- Same inline data-URI favicon as the demo, so the tab never flickers
+		     between a missing icon and the real one during the redirect. -->
+		<link
+			rel="icon"
+			href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2308060f'/%3E%3Crect x='5' y='9' width='22' height='18' rx='5' fill='%238b7cf6'/%3E%3Cpath d='M12 14h8' stroke='%23f4f2fb' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+		<style>
+			/* The demo's palette, trimmed to the five values this page uses.
+			   --iris-text is the step of the accent that clears 7:1 on the
+			   near-black background; --iris-dim is edges and glow only. */
+			:root {
+				--bg-deep: #08060f;
+				--iris-dim: #6a55c4;
+				--iris-text: #a596fa;
+				--cream: #f4f2fb;
+				--text-dim: #aca3c4;
+			}
+
+			* {
+				box-sizing: border-box;
+				margin: 0;
+				padding: 0;
+			}
+
+			html {
+				background: var(--bg-deep);
+			}
+
+			body {
+				position: relative;
+				min-height: 100vh;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 1.5rem;
+				padding: 2rem 1.5rem;
+				color: var(--text-dim);
+				background: var(--bg-deep);
+				font-family: 'Outfit', system-ui, sans-serif;
+				font-weight: 300;
+				text-align: center;
+				overflow: hidden;
+				-webkit-font-smoothing: antialiased;
+			}
+
+			body::before {
+				content: '';
+				position: absolute;
+				top: 50%;
+				left: 50%;
+				width: 900px;
+				height: 800px;
+				max-width: 130vw;
+				transform: translate(-50%, -60%);
+				background: radial-gradient(ellipse, rgba(139, 124, 246, 0.13), transparent 68%);
+				pointer-events: none;
+			}
+
+			/* The component's own silhouette: a detached card with its handle. */
+			.mark {
+				position: relative;
+				width: 92px;
+				height: 62px;
+				border: 1px solid var(--iris-dim);
+				border-radius: 12px;
+				box-shadow: 0 0 40px rgba(139, 124, 246, 0.13);
+			}
+
+			.mark::after {
+				content: '';
+				position: absolute;
+				top: 9px;
+				left: 50%;
+				width: 30px;
+				height: 4px;
+				background: var(--iris-text);
+				border-radius: 3px;
+				transform: translateX(-50%);
+			}
+
+			p {
+				position: relative;
+				font-size: 1rem;
+				letter-spacing: 0.02em;
+			}
+
+			.name {
+				position: relative;
+				max-width: 100%;
+				color: var(--cream);
+				font-family: 'Courier New', ui-monospace, monospace;
+				font-size: 0.86rem;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+			}
+
+			a {
+				color: var(--iris-text);
+				text-decoration: none;
+				border-bottom: 1px solid transparent;
+				transition: border-color 0.25s ease;
+			}
+
+			a:hover {
+				border-bottom-color: var(--iris-dim);
+			}
+
+			a:focus-visible {
+				outline: 2px solid var(--iris-text);
+				outline-offset: 3px;
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				a {
+					transition: none;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<div class="mark" aria-hidden="true"></div>
+		<span class="name">@magic-spells/sheet</span>
+		<p>Redirecting to the <a href="./demo/">sheet demo</a>&hellip;</p>
+		<script>
+			window.location.replace('./demo/');
+		</script>
+	</body>
+</html>

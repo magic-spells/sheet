@@ -1,0 +1,458 @@
+:root {
+	--sheet-panel-background: white;
+	--sheet-panel-border-radius: 25px;
+	--sheet-card-margin: 12px;
+	--sheet-card-border-radius: 20px;
+	--sheet-panel-box-shadow: 0 1px 20px -4px rgba(0, 0, 0, 0.3), 0 0 7px rgba(0, 0, 0, 0.1);
+	--sheet-handle-color: #bbb;
+	--sheet-handle-width: 50px;
+	--sheet-handle-height: 5px;
+	--sheet-handle-offset: 8px;
+	--sheet-handle-inset: calc(var(--sheet-handle-offset) + var(--sheet-handle-height) + 8px);
+	/* A side handle runs along a tall edge rather than across a short one, so it
+	   reads heavier at the same weight — it is drawn a little thinner. */
+	--sheet-handle-side-thickness: 4px;
+	--sheet-handle-side-length: var(--sheet-handle-width);
+	/* Reserves only the pill's own footprint. Any breathing room on top of it
+	   shifts every child over and reads as lopsided padding on a narrow panel;
+	   the child's own --sheet-content-padding gutter provides the clearance. */
+	--sheet-handle-side-inset: calc(var(--sheet-handle-offset) + var(--sheet-handle-side-thickness));
+	--sheet-bleed: 120px;
+	--sheet-content-padding: 20px;
+	--sheet-footer-padding: var(--sheet-content-padding);
+	--sheet-footer-background: transparent;
+	--sheet-overlay-background: rgba(0, 0, 0, 0.5);
+	--sheet-overlay-blur: 5px;
+	--sheet-desktop-panel-width: min(26rem, 90vw);
+	--sheet-center-width: min(28rem, calc(100vw - 2 * var(--sheet-card-margin)));
+
+	/* How far past its own edge a dismissal carries the panel, on top of its size
+	   and whatever gap it already floats by. It has to clear the SHADOW, not just
+	   the box: the default below suits the default --sheet-panel-box-shadow, and a
+	   softer one needs more. Raise it to roughly the shadow's blur if the panel
+	   leaves a halo behind on the way out. Probed by JS, so any CSS length works. */
+	--sheet-exit-cushion: 28px;
+
+	/* Profile morph. The one motion in this package that is not spring-driven:
+	   crossing a breakpoint interpolates a BOX between two resting geometries,
+	   and there is no meaningful spring position for a run whose start and end
+	   share almost no properties. Read from JS as well as applied here, so
+	   zeroing the duration collapses the morph to an instant swap. */
+	--sheet-morph-duration: 600ms;
+	--sheet-morph-easing: cubic-bezier(0.34, 1.32, 0.52, 1);
+}
+
+/* The engine writes motion inline. These rules only establish resting geometry. */
+dialog-panel[morph][state]:has(sheet-panel) > dialog {
+	box-sizing: border-box;
+	position: fixed;
+	background: var(--sheet-panel-background);
+	border: none;
+	padding: 0;
+	max-width: none;
+	max-height: none;
+	overflow: hidden;
+	box-shadow: var(--sheet-panel-box-shadow);
+	/* Just above the dialog-backdrop scrim (--dialog-backdrop-z-index, 1000)
+	   for any normal-flow render. Extreme values here re-create dialog-panel's
+	   open-frame compositor re-sort flicker — see its dialog-backdrop rule. */
+	z-index: var(--sheet-panel-z-index, 1001);
+}
+
+/* Closed native dialogs must retain the UA's display:none. SheetEngine adds an
+   inline display only for the closed-dialog opening and closing flight. */
+dialog-panel:has(sheet-panel) > dialog[open] {
+	display: flex;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position='bottom']) > dialog {
+	inset: auto 0 0;
+	width: 100%;
+	margin: 0;
+	padding-bottom: env(safe-area-inset-bottom, 0px);
+	border-radius: var(--sheet-panel-border-radius) var(--sheet-panel-border-radius) 0 0;
+}
+
+/* A bottom panel's HEIGHT is the one thing its two profiles genuinely disagree
+   about, so it is stated CONDITIONALLY rather than declared once and overridden.
+   Two rules that both set `height` on the same element would leave source order
+   and specificity to decide, and the desktop one would have to keep winning
+   forever; these selectors are mutually exclusive instead.
+
+   Below the breakpoint the height is a snap point, published by JS as
+   --sheet-active-size with the default largest snap as the CSS fallback. */
+dialog-panel[morph][state]:has(sheet-panel[data-position='bottom']:not([data-desktop='true']))
+	> dialog {
+	height: var(--sheet-active-size, 85vh);
+}
+
+/* Past the breakpoint `snap-points` no longer applies at all and the panel is
+   sized by its content, exactly like `center` — a desktop dialog that happens to
+   sit on the bottom edge rather than in the middle of the screen. `fit-content`
+   for the same reason center uses it: an 85vh slab holding four rows and a
+   paragraph is mostly empty surface. The max-height is the only ceiling up here,
+   so a tall panel still scrolls inside itself rather than running off screen. */
+dialog-panel[morph][state]:has(sheet-panel[data-desktop='true'][data-position='bottom']) > dialog {
+	height: fit-content;
+	max-height: calc(100dvh - 2 * var(--sheet-card-margin));
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position='left']) > dialog {
+	inset: 0 auto 0 0;
+	width: var(--sheet-active-size, min(26rem, 90vw));
+	height: 100dvh;
+	margin: 0;
+	padding-left: env(safe-area-inset-left, 0px);
+	border-radius: 0 var(--sheet-panel-border-radius) var(--sheet-panel-border-radius) 0;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position='right']) > dialog {
+	inset: 0 0 0 auto;
+	width: var(--sheet-active-size, min(26rem, 90vw));
+	height: 100dvh;
+	margin: 0;
+	padding-right: env(safe-area-inset-right, 0px);
+	border-radius: var(--sheet-panel-border-radius) 0 0 var(--sheet-panel-border-radius);
+}
+
+/* A centered dialog mostly DECLINES to override dialog-panel's own [morph] rule,
+   which already supplies `position: fixed; inset: 0; margin: auto`. The three
+   edge profiles above exist to undo that centering; this one keeps it and only
+   states its own size. Height is intrinsic, which is why JS measures the laid-out
+   box rather than reading a token — see #measureBox. */
+dialog-panel[morph][state]:has(sheet-panel[data-position='center']) > dialog {
+	inset: 0;
+	margin: auto;
+	width: var(--sheet-center-width);
+	/* NOT `auto`. `inset: 0` pins both top and bottom, and an absolutely
+	   positioned box with both edges pinned and an auto height is solved to FILL
+	   the space — `margin: auto` only centres a height that is already definite.
+	   The result was a two-line confirm stretched to max-height. `fit-content`
+	   makes the height definite from the content, which is both the size we want
+	   and the precondition the auto margins need. */
+	height: fit-content;
+	max-width: calc(100vw - 2 * var(--sheet-card-margin));
+	max-height: calc(100dvh - 2 * var(--sheet-card-margin));
+	border-radius: var(--sheet-card-border-radius);
+}
+
+dialog-panel[morph][state]:has(sheet-footer) > dialog {
+	padding-bottom: 0;
+	padding-left: 0;
+	padding-right: 0;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode='card'][data-position='bottom']) > dialog {
+	inset: auto var(--sheet-card-margin) var(--sheet-card-margin);
+	width: auto;
+	max-width: calc(100vw - 2 * var(--sheet-card-margin));
+	padding-bottom: 0;
+	border-radius: var(--sheet-card-border-radius);
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode='card'][data-position='left']) > dialog {
+	inset: var(--sheet-card-margin) auto var(--sheet-card-margin) var(--sheet-card-margin);
+	height: auto;
+	max-height: calc(100dvh - 2 * var(--sheet-card-margin));
+	padding-left: 0;
+	border-radius: var(--sheet-card-border-radius);
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode='card'][data-position='right']) > dialog {
+	inset: var(--sheet-card-margin) var(--sheet-card-margin) var(--sheet-card-margin) auto;
+	height: auto;
+	max-height: calc(100dvh - 2 * var(--sheet-card-margin));
+	padding-right: 0;
+	border-radius: var(--sheet-card-border-radius);
+}
+
+dialog-panel[morph][state]:has(
+		sheet-panel[data-desktop='true'][data-mode='card'][data-position='bottom']
+	)
+	> dialog {
+	width: var(--sheet-desktop-panel-width);
+	left: var(--sheet-card-margin);
+	right: var(--sheet-card-margin);
+	margin-inline: auto;
+}
+
+dialog-panel[morph][state]:has(
+		sheet-panel[data-desktop='true'][data-mode='card'][data-position='left']
+	)
+	> dialog,
+dialog-panel[morph][state]:has(
+		sheet-panel[data-desktop='true'][data-mode='card'][data-position='right']
+	)
+	> dialog {
+	width: min(
+		var(--sheet-active-size, var(--sheet-desktop-panel-width)),
+		var(--sheet-desktop-panel-width)
+	);
+	max-width: var(--sheet-desktop-panel-width);
+}
+
+/* Off-screen bleed. Spring overshoot and rubber-band pulls move the panel past
+   its resting edge; without a bleed that reveals the page behind the sheet.
+   Painted as a solid offset box-shadow so it is never clipped by the dialog's
+   overflow, never captures pointer events, and always sits behind the content.
+   Card modes float with margins — their overshoot correctly reveals the
+   backdrop, so they get no bleed. */
+dialog-panel[morph][state]:has(sheet-panel[data-mode='edge'][data-position='bottom']) > dialog {
+	box-shadow:
+		0 var(--sheet-bleed) 0 0 var(--sheet-panel-background),
+		var(--sheet-panel-box-shadow);
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode='edge'][data-position='left']) > dialog {
+	box-shadow:
+		calc(-1 * var(--sheet-bleed)) 0 0 0 var(--sheet-panel-background),
+		var(--sheet-panel-box-shadow);
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode='edge'][data-position='right']) > dialog {
+	box-shadow:
+		var(--sheet-bleed) 0 0 0 var(--sheet-panel-background),
+		var(--sheet-panel-box-shadow);
+}
+
+/* Single-backdrop architecture: the native ::backdrop IS the scrim. It lives
+   in the top layer, born and dying with the dialog — one viewport surface,
+   nothing for showModal()'s insertion to re-sort against. The previous shape
+   (a transparent ::backdrop inserted above a glass <dialog-backdrop> element)
+   made every open re-rasterize the glass layer, an intermittent whole-page
+   flicker on GPU-heavy pages. A sheet can own its scrim this way because the
+   direct engine keeps the dialog open for the entire exit — the scrim fades
+   out fully before close(). Clicks on ::backdrop still report the dialog as
+   their target, so backdrop-tap dismissal and the dismiss-policy guards are
+   unchanged. */
+dialog-panel:has(sheet-panel) > dialog-backdrop {
+	display: none;
+}
+
+dialog-panel:has(sheet-panel) > dialog::backdrop {
+	background: var(--sheet-overlay-background);
+	backdrop-filter: blur(var(--sheet-overlay-blur));
+	-webkit-backdrop-filter: blur(var(--sheet-overlay-blur));
+	/* JS drives opacity per frame through the token — a transition would lag
+	   the spring. */
+	transition: none;
+	opacity: 0;
+}
+
+/* The overlay tracks the DISMISSAL ZONE rather than raw progress, so it fades
+   with the sheet on the way in and out but holds rock steady through
+   snap-to-snap travel and rubber-band overscroll. The token is written on the
+   dialog-panel and reaches the pseudo-element by inheritance (panel → dialog
+   → ::backdrop, per the modern spec). No hidden-state filter toggle is needed
+   any more: a closed dialog has no ::backdrop at all. */
+dialog-panel[morph][state='showing']:has(sheet-panel) > dialog::backdrop,
+dialog-panel[morph][state='shown']:has(sheet-panel) > dialog::backdrop {
+	opacity: var(--sheet-backdrop-progress, 1);
+}
+
+dialog-panel[morph][state='hiding']:has(sheet-panel) > dialog::backdrop {
+	opacity: var(--sheet-backdrop-progress, 0);
+}
+
+sheet-panel {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	box-sizing: border-box;
+	min-width: 0;
+	min-height: 0;
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+	/* Anchors a side sheet's handle, which is centred on the PANEL. */
+	position: relative;
+}
+
+/* The two profiles whose height follows their content: a centred dialog at any
+   width, and a bottom panel past the breakpoint. `height: 100%` above resolves
+   against a dialog that is itself content-sized, which the flex layout then
+   settles at max-height — so a two-line confirm filled the screen instead of
+   reading as a modal. Opting out here lets the intrinsic height through; the
+   dialog's own max-height still caps it, and `sheet-content` keeps
+   `min-height: 0` so it scrolls once capped. */
+sheet-panel[data-position='center'],
+sheet-panel[data-desktop='true'][data-position='bottom'] {
+	height: auto;
+}
+
+sheet-header,
+sheet-footer {
+	display: block;
+	box-sizing: border-box;
+	flex-shrink: 0;
+	touch-action: none;
+}
+
+sheet-header {
+	position: relative;
+	padding: var(--sheet-handle-inset) var(--sheet-content-padding) 0;
+}
+
+/* The handle sits on the edge the sheet is dragged toward: top-centre for a
+   bottom sheet, and vertically centred on the inner edge for a side sheet.
+   Keyed off data-position, which the component reflects from the resolved
+   profile, so the desktop profile moves the handle too. */
+sheet-header::before {
+	content: '';
+	position: absolute;
+	top: var(--sheet-handle-offset);
+	left: 50%;
+	width: var(--sheet-handle-width);
+	height: var(--sheet-handle-height);
+	background: var(--sheet-handle-color);
+	border-radius: var(--sheet-handle-height);
+	transform: translateX(-50%);
+}
+
+sheet-panel[data-position='left'] sheet-header,
+sheet-panel[data-position='right'] sheet-header {
+	padding-top: var(--sheet-content-padding);
+}
+
+/* A side sheet's handle belongs to the PANEL, not the header. Centred on the
+   header it sat wherever the header happened to end — near the top of a
+   full-height sheet, nowhere near the middle of the edge being dragged. Hosting
+   it on the sheet centres it on the panel; the sheet then reserves that edge
+   with its own padding so header, content and footer all clear it. */
+sheet-panel[data-position='left'] sheet-header::before,
+sheet-panel[data-position='right'] sheet-header::before {
+	content: none;
+}
+
+sheet-panel[data-position='left'] {
+	padding-right: var(--sheet-handle-side-inset);
+}
+
+sheet-panel[data-position='right'] {
+	padding-left: var(--sheet-handle-side-inset);
+}
+
+/* The strip is a rigid drag surface like the header and footer, so no native
+   pan may begin on it. Scroll containers inside the content implement their
+   own pans below this element, so their touch-action chains never reach the
+   panel and nested scrolling is unaffected. */
+sheet-panel[data-position='left'],
+sheet-panel[data-position='right'] {
+	touch-action: none;
+}
+
+sheet-panel[data-position='left']::before,
+sheet-panel[data-position='right']::before {
+	content: '';
+	position: absolute;
+	top: 50%;
+	width: var(--sheet-handle-side-thickness);
+	height: var(--sheet-handle-side-length);
+	background: var(--sheet-handle-color);
+	border-radius: var(--sheet-handle-side-thickness);
+	transform: translateY(-50%);
+	pointer-events: none;
+}
+
+sheet-panel[data-position='left']::before {
+	right: var(--sheet-handle-offset);
+}
+
+sheet-panel[data-position='right']::before {
+	left: var(--sheet-handle-offset);
+}
+
+/* The handle advertises touch travel — swipe-to-dismiss and snap spots — and
+   the desktop profile has neither: no touch swipes, and a desktop bottom sheet
+   is dismiss-only. So above the breakpoint the handle goes, along with every
+   bit of room reserved for it. Keyed off data-desktop rather than a media
+   query because the breakpoint is a per-instance attribute. */
+sheet-panel[data-desktop='true'] sheet-header {
+	padding-top: var(--sheet-content-padding);
+}
+
+sheet-panel[data-desktop='true'] sheet-header::before,
+sheet-panel[data-desktop='true'][data-position='left']::before,
+sheet-panel[data-desktop='true'][data-position='right']::before {
+	content: none;
+}
+
+sheet-panel[data-desktop='true'][data-position='left'] {
+	padding-right: 0;
+}
+
+sheet-panel[data-desktop='true'][data-position='right'] {
+	padding-left: 0;
+}
+
+/* The handle is a touch affordance, and the breakpoint cannot see the input
+   device: a mobile-profile sheet on a desktop machine — any panel whose
+   breakpoint exceeds the window — would still draw one for a finger that does
+   not exist. So a device whose primary pointer is a mouse or trackpad never
+   shows a handle at all, whatever the profile says. */
+@media (pointer: fine) {
+	sheet-header {
+		padding-top: var(--sheet-content-padding);
+	}
+
+	sheet-header::before,
+	sheet-panel[data-position='left']::before,
+	sheet-panel[data-position='right']::before {
+		content: none;
+	}
+
+	sheet-panel[data-position='left'] {
+		padding-right: 0;
+	}
+
+	sheet-panel[data-position='right'] {
+		padding-left: 0;
+	}
+}
+
+sheet-content {
+	display: block;
+	box-sizing: border-box;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	padding: var(--sheet-content-padding);
+	overflow: auto;
+	overscroll-behavior: contain;
+	/* The claim logic arbitrates sheet vs content, not touch-action: the
+	   component's non-passive touchmove veto suppresses native scrolling only
+	   once the sheet has claimed the drag. Both axes therefore stay natively
+	   pannable, so a nested horizontal scroller — and a tall side panel — still
+	   scrolls by touch. Pinning one axis per profile forbade panning on the
+	   other for every descendant. */
+	touch-action: pan-x pan-y;
+	-webkit-overflow-scrolling: touch;
+}
+
+sheet-footer {
+	padding: var(--sheet-footer-padding);
+	background: var(--sheet-footer-background);
+}
+
+sheet-panel[data-position='bottom'] sheet-footer {
+	padding-bottom: calc(var(--sheet-footer-padding) + env(safe-area-inset-bottom, 0px));
+}
+
+sheet-panel[data-position='left'] sheet-footer {
+	padding-left: calc(var(--sheet-footer-padding) + env(safe-area-inset-left, 0px));
+}
+
+sheet-panel[data-position='right'] sheet-footer {
+	padding-right: calc(var(--sheet-footer-padding) + env(safe-area-inset-right, 0px));
+}
+
+/* The morph is the only motion here a media query can reach, because it is the
+   only one expressed as a CSS transition rather than as spring-driven inline
+   frames. Zeroing the duration is enough on its own: the component reads this
+   same token back and skips the transition entirely when it resolves to 0, so
+   the profile change lands as an instant swap with no dangling wait. */
+@media (prefers-reduced-motion: reduce) {
+	:root {
+		--sheet-morph-duration: 0ms;
+	}
+}

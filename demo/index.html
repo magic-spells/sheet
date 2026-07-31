@@ -1,0 +1,4162 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Sheet — @magic-spells</title>
+		<meta
+			name="description"
+			content="Gesture-driven bottom, side, and centered dialog sheets built on a real native <dialog>. Spring motion, snap points you can drag and flick between, and responsive profiles." />
+		<link rel="canonical" href="https://magic-spells.github.io/sheet/demo/" />
+		<meta property="og:type" content="website" />
+		<meta property="og:title" content="@magic-spells/sheet" />
+		<meta
+			property="og:description"
+			content="Every edge, and a spring home. Bottom-sheet snap points, flicks that step exactly one, and a real spring carrying every landing." />
+		<meta property="og:url" content="https://magic-spells.github.io/sheet/demo/" />
+		<meta name="twitter:card" content="summary" />
+		<!-- Inlined as a data URI so the repo stays binary-free and the browser's
+		     automatic /favicon.ico request never 404s. A fully rounded card with
+		     its handle bar — card mode, which is the shape only this sheet has. -->
+		<link
+			rel="icon"
+			href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2308060f'/%3E%3Crect x='5' y='9' width='22' height='18' rx='5' fill='%238b7cf6'/%3E%3Cpath d='M12 14h8' stroke='%23f4f2fb' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Outfit:wght@200;300;400;500&display=swap"
+			rel="stylesheet" />
+
+		<link rel="stylesheet" href="./vendor/dialog-panel.css" />
+		<link rel="stylesheet" href="./dist/sheet.css" />
+
+		<script type="importmap">
+			{
+				"imports": {
+					"@magic-spells/frame-engine": "./vendor/frame-engine.esm.js",
+					"@magic-spells/physics-engine": "./vendor/physics-engine.esm.js"
+				}
+			}
+		</script>
+
+		<style>
+			:root {
+				--bg-deep: #08060f;
+				--bg-card: #100d1c;
+				--bg-card-hover: #161224;
+				--bg-well: #0a0813;
+				--border: #241d38;
+				--border-accent: #3d3060;
+
+				/* Approved accent. --iris carries edges, glows and rules; text uses
+				   --iris-text, one step lighter, because #8b7cf6 lands at 5.8:1 on
+				   the card background and every text step on this page clears 7:1.
+				   --iris-dim is border-and-gradient only, never type. */
+				--iris: #8b7cf6;
+				--iris-dim: #6a55c4;
+				--iris-glow: rgba(139, 124, 246, 0.13);
+				--iris-text: #a596fa;
+
+				/* Text ramp — measured against --bg-card, the darkest surface any of
+				   these sit on: cream 17.3:1 · cream-dim 11.7:1 · text 13.9:1 ·
+				   text-dim 8.0:1 · iris-text 7.6:1. On --bg-well every step gains
+				   about 4%, and on the sheet's own --sheet-panel-background every step
+				   still clears 7:1 (iris-text bottoms out at 7.4:1). */
+				--cream: #f4f2fb;
+				--cream-dim: #cdc6e2;
+				--text: #ded9ee;
+				--text-dim: #aca3c4;
+
+				--font-display: 'Cormorant Garamond', Georgia, serif;
+				--font-body: 'Outfit', system-ui, sans-serif;
+				--font-mono: 'Courier New', ui-monospace, monospace;
+
+				/* Component tokens — the same knobs documented in the reference below */
+				--sheet-panel-background: #14101f;
+				--sheet-panel-border-radius: 25px;
+				--sheet-card-margin: 12px;
+				--sheet-card-border-radius: 20px;
+				--sheet-panel-box-shadow: 0 2px 60px rgba(0, 0, 0, 0.6), 0 0 40px rgba(139, 124, 246, 0.07);
+				--sheet-handle-color: #6a5f8f;
+				--sheet-handle-width: 50px;
+				--sheet-handle-height: 5px;
+				--sheet-handle-offset: 8px;
+				--sheet-content-padding: 20px;
+				--sheet-footer-padding: 20px;
+				--sheet-footer-background: #1a1528;
+				--sheet-overlay-background: rgba(4, 2, 10, 0.72);
+				--sheet-overlay-blur: 6px;
+				--sheet-desktop-panel-width: min(480px, 90vw);
+				--sheet-center-width: min(480px, calc(100vw - 2 * var(--sheet-card-margin)));
+
+				/* This page's shadow is a 60px blur — more than double the 28px the
+				   default cushion assumes — so an exit that only cleared the box left a
+				   visible halo hanging over the edge. The cushion is a token precisely
+				   so a soft shadow can say so. */
+				--sheet-exit-cushion: 72px;
+			}
+
+			/* ------------------------------------------------
+			   Frosted-glass scrim (demo-only — matches the
+			   dialog-panel demo; consumers can layer the same
+			   noise + saturate onto the ::backdrop scrim)
+			------------------------------------------------ */
+			dialog-panel:has(sheet-panel) > dialog::backdrop {
+				backdrop-filter: blur(var(--sheet-overlay-blur)) saturate(115%);
+				-webkit-backdrop-filter: blur(var(--sheet-overlay-blur)) saturate(115%);
+				background-image: url('./bg-noise.png');
+				background-size: 50px 50px;
+			}
+
+			* {
+				box-sizing: border-box;
+				margin: 0;
+				padding: 0;
+			}
+
+			html {
+				background: var(--bg-deep);
+				scroll-behavior: smooth;
+			}
+
+			body {
+				min-width: 0;
+				color: var(--text);
+				background: var(--bg-deep);
+				font-family: var(--font-body);
+				font-weight: 300;
+				overflow-x: hidden;
+				-webkit-font-smoothing: antialiased;
+			}
+
+			/* ---- Noise overlay ----
+			   Modest z-index on purpose: above page content and the scrim (1000),
+			   but an extreme value here pins a viewport-sized fixed layer at the
+			   top of the stacking order and invites the compositor re-sort/tile
+			   jank the packages just fixed. The top layer beats any z-index, so a
+			   huge value never covered open dialogs anyway. */
+			body::before {
+				content: '';
+				position: fixed;
+				inset: 0;
+				z-index: 2000;
+				pointer-events: none;
+				opacity: 0.025;
+				background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+				background-repeat: repeat;
+				background-size: 256px;
+			}
+
+			:where(a, button, input, [tabindex]):focus-visible {
+				outline: 2px solid var(--iris-text);
+				outline-offset: 3px;
+			}
+
+			/* ---- Hero ---- */
+			.hero {
+				position: relative;
+				padding: 4rem 1.5rem 2.5rem;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				text-align: center;
+				overflow: hidden;
+			}
+
+			.hero::before {
+				content: '';
+				position: absolute;
+				top: -38%;
+				left: 50%;
+				width: 1000px;
+				height: 900px;
+				max-width: 130vw;
+				transform: translateX(-50%);
+				background: radial-gradient(ellipse, var(--iris-glow), transparent 68%);
+				pointer-events: none;
+			}
+
+			/* ---- Signature ----
+			   A viewport with a handle on three of its edges and the demo's own
+			   snap heights ruled across it. It is the one thing this component
+			   does that a bottom sheet cannot: arrive from any edge, and stop
+			   part way. Everything else on the page stays quiet. */
+			.edge-mark {
+				position: relative;
+				width: 132px;
+				height: 86px;
+				margin-bottom: 2.25rem;
+				border: 1px solid var(--border-accent);
+				border-radius: 12px;
+				box-shadow: 0 0 44px var(--iris-glow);
+			}
+
+			.edge-mark-snap {
+				position: absolute;
+				left: 14px;
+				right: 14px;
+				height: 1px;
+				background: var(--iris-dim);
+				opacity: 0.55;
+			}
+
+			/* the three snap heights the first demo actually declares */
+			.edge-mark-snap.s20 {
+				bottom: 20%;
+			}
+
+			.edge-mark-snap.s55 {
+				bottom: 55%;
+			}
+
+			.edge-mark-snap.s90 {
+				bottom: 90%;
+			}
+
+			/* The saturated base accent, matching the favicon's card fill. These are
+			   decorative marks, never type, so 5.8:1 is the right place for it. */
+			.edge-mark-bar {
+				position: absolute;
+				background: var(--iris);
+				border-radius: 3px;
+			}
+
+			.edge-mark-bar.bottom {
+				bottom: 6px;
+				left: 50%;
+				width: 34px;
+				height: 4px;
+				transform: translateX(-50%);
+			}
+
+			.edge-mark-bar.left {
+				top: 50%;
+				left: 6px;
+				width: 4px;
+				height: 26px;
+				transform: translateY(-50%);
+			}
+
+			.edge-mark-bar.right {
+				top: 50%;
+				right: 6px;
+				width: 4px;
+				height: 26px;
+				transform: translateY(-50%);
+			}
+
+			.hero-badge {
+				position: relative;
+				max-width: 100%;
+				margin-bottom: 2.25rem;
+				padding: 0.45em 1.25em;
+				color: var(--iris-text);
+				border: 1px solid var(--border-accent);
+				border-radius: 100px;
+				font-size: 0.95rem;
+				font-weight: 400;
+				letter-spacing: 0.1em;
+				text-decoration: none;
+				text-transform: uppercase;
+				transition: border-color 0.3s ease;
+			}
+
+			.hero-badge:hover {
+				border-color: var(--iris-dim);
+			}
+
+			.hero h1 {
+				position: relative;
+				max-width: 12ch;
+				margin-bottom: 1.5rem;
+				color: var(--cream);
+				font-family: var(--font-display);
+				font-size: clamp(3.1rem, 10vw, 7.4rem);
+				font-weight: 300;
+				letter-spacing: -0.025em;
+				line-height: 0.95;
+			}
+
+			.hero h1 em {
+				color: var(--iris-text);
+				font-style: italic;
+				font-weight: 300;
+			}
+
+			.hero-tagline {
+				position: relative;
+				max-width: 620px;
+				font-size: 1.1rem;
+				line-height: 1.72;
+				text-wrap: pretty;
+			}
+
+			/* ---- Install ---- */
+			.install {
+				position: relative;
+				margin-top: 2.5rem;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				gap: 0.55rem;
+				max-width: 100%;
+			}
+
+			.install-label {
+				color: var(--text-dim);
+				font-size: 0.8rem;
+				font-weight: 400;
+				letter-spacing: 0.18em;
+				text-transform: uppercase;
+			}
+
+			.install-value {
+				max-width: calc(100vw - 2.5rem);
+				padding: 0.6em 1.1em;
+				color: var(--cream);
+				background: var(--bg-card);
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				font-family: var(--font-mono);
+				font-size: clamp(0.76rem, 3.4vw, 0.94rem);
+				white-space: nowrap;
+				overflow-x: auto;
+				user-select: all;
+				cursor: copy;
+				transition:
+					border-color 0.3s ease,
+					color 0.3s ease;
+			}
+
+			.install-value:hover {
+				border-color: var(--iris-dim);
+			}
+
+			.install.copied .install-label {
+				color: var(--iris-text);
+			}
+
+			.install.copied .install-value {
+				color: var(--iris-text);
+				border-color: var(--iris-dim);
+			}
+
+			.uses {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				gap: 0.55rem;
+				margin-top: 0.9rem;
+			}
+
+			.uses-label {
+				color: var(--cream-dim);
+				font-family: var(--font-mono);
+				font-size: 0.72rem;
+				letter-spacing: 0.22em;
+				text-transform: uppercase;
+			}
+
+			.dep-badge {
+				display: inline-block;
+				padding: 0.32em 0.85em;
+				border: 1px solid var(--border-accent);
+				border-radius: 100px;
+				color: var(--cream);
+				font-family: var(--font-mono);
+				font-size: 0.82rem;
+				text-decoration: none;
+				transition:
+					color 0.25s ease,
+					border-color 0.25s ease;
+			}
+
+			.dep-badge:hover {
+				color: var(--iris-text);
+				border-color: var(--iris-dim);
+			}
+
+			.dep-scope {
+				opacity: 0.55;
+			}
+
+			.hero-line {
+				position: relative;
+				width: 1px;
+				height: 70px;
+				margin-top: 2.75rem;
+				background: linear-gradient(var(--iris-dim), transparent);
+			}
+
+			/* ---- Sections ---- */
+			.demos {
+				width: min(1080px, 100%);
+				margin: 0 auto;
+				padding: 1rem 1.25rem 6rem;
+				display: flex;
+				flex-direction: column;
+				gap: 3rem;
+			}
+
+			.demo-section {
+				min-width: 0;
+				padding: 2.5rem;
+				background: var(--bg-card);
+				border: 1px solid var(--border);
+				border-radius: 16px;
+				transition:
+					background 0.3s ease,
+					border-color 0.3s ease;
+			}
+
+			.demo-section:hover {
+				background: var(--bg-card-hover);
+				border-color: var(--border-accent);
+			}
+
+			/* ---- Spec bar ----
+			   The eyebrow is a measurement, not an ordinal: each section is labelled
+			   with the actual constant or quantity it teaches, read off like a gauge. */
+			.spec {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: center;
+				gap: 0.5rem 0.85rem;
+				margin-bottom: 1.35rem;
+			}
+
+			.spec-key {
+				color: var(--iris-text);
+				font-family: var(--font-mono);
+				font-size: 0.8rem;
+				letter-spacing: 0.22em;
+				text-transform: uppercase;
+			}
+
+			.spec-rule {
+				flex: 1 1 1.5rem;
+				min-width: 1.5rem;
+				height: 1px;
+				background: linear-gradient(to right, var(--border-accent), var(--border) 65%, transparent);
+			}
+
+			.spec-val {
+				color: var(--cream-dim);
+				font-family: var(--font-mono);
+				font-size: 0.8rem;
+				letter-spacing: 0.04em;
+				white-space: nowrap;
+			}
+
+			.demo-section h2 {
+				margin-bottom: 1rem;
+				color: var(--cream);
+				font-family: var(--font-display);
+				font-size: clamp(2rem, 5vw, 3.1rem);
+				font-weight: 400;
+				letter-spacing: -0.01em;
+				line-height: 1.08;
+			}
+
+			.demo-section h2 em {
+				color: var(--iris-text);
+				font-style: italic;
+				font-weight: 400;
+			}
+
+			.demo-desc {
+				max-width: 700px;
+				margin-bottom: 1.6rem;
+				font-size: 1.07rem;
+				line-height: 1.72;
+				text-wrap: pretty;
+			}
+
+			.demo-desc + .demo-desc {
+				margin-top: -0.9rem;
+			}
+
+			.demo-desc code,
+			.sheet-copy code,
+			.ref-note code {
+				color: var(--cream);
+				font-family: var(--font-mono);
+				font-size: 0.94em;
+			}
+
+			.demo-desc strong {
+				color: var(--cream);
+				font-weight: 400;
+			}
+
+			/* ---- Stage ---- */
+			.stage {
+				min-width: 0;
+				padding: 2rem;
+				background:
+					radial-gradient(ellipse at 50% 130%, var(--iris-glow), transparent 60%),
+					linear-gradient(135deg, rgba(255, 255, 255, 0.012), rgba(255, 255, 255, 0.035));
+				border: 1px solid var(--border);
+				border-radius: 12px;
+			}
+
+			.stage-row {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: center;
+				gap: 0.9rem 1.25rem;
+			}
+
+			.controls {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: center;
+				gap: 0.75rem;
+			}
+
+			.btn,
+			.close-btn {
+				color: var(--cream);
+				background: transparent;
+				border: 1px solid var(--border-accent);
+				font: inherit;
+				cursor: pointer;
+			}
+
+			.btn {
+				padding: 0.65em 1.45em;
+				border-radius: 100px;
+				font-size: 0.95rem;
+				font-weight: 400;
+				letter-spacing: 0.09em;
+				text-transform: uppercase;
+				transition:
+					color 0.25s ease,
+					border-color 0.25s ease;
+			}
+
+			.btn:hover,
+			.close-btn:hover {
+				color: var(--iris-text);
+				border-color: var(--iris-dim);
+			}
+
+			.btn:active {
+				transform: translateY(1px);
+			}
+
+			.readout {
+				min-width: min(100%, 280px);
+				color: var(--cream-dim);
+				font-family: var(--font-mono);
+				font-size: 0.9rem;
+				line-height: 1.5;
+				/* the readouts write two lines with a \A */
+				white-space: pre-line;
+			}
+
+			.flick-sheet-readout {
+				display: block;
+				min-width: 0;
+				margin: 1rem 0;
+				padding: 0.9rem 1rem;
+				background: rgba(255, 255, 255, 0.035);
+				border: 1px solid var(--border-accent);
+				border-radius: 10px;
+			}
+
+			/* ---- Profile cards ----
+			   A button in the breakpoint section opens one of two different sheets
+			   depending on the viewport, which a label alone cannot say. Each is
+			   boxed with both profiles spelled out, and the row matching the current
+			   viewport is lit — at 768px, the same breakpoint those sheets use. */
+			.profile-grid {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+				gap: 1rem;
+				margin-bottom: 1.5rem;
+			}
+
+			.profile-card {
+				display: flex;
+				flex-direction: column;
+				gap: 0.85rem;
+				min-width: 0;
+				padding: 1.15rem;
+				background: rgba(255, 255, 255, 0.035);
+				border: 1px solid var(--border-accent);
+				border-radius: 10px;
+			}
+
+			.profile-title {
+				color: var(--cream);
+				font-size: 1.02rem;
+				font-weight: 400;
+				line-height: 1.3;
+			}
+
+			.profile-side {
+				display: grid;
+				gap: 0.2rem;
+				padding-left: 0.7rem;
+				border-left: 2px solid var(--profile-rule, var(--border-accent));
+			}
+
+			.profile-side-key {
+				color: var(--profile-key, var(--text-dim));
+				font-family: var(--font-mono);
+				font-size: 0.72rem;
+				letter-spacing: 0.18em;
+				text-transform: uppercase;
+			}
+
+			/* The lit row says so in words as well as in colour */
+			.profile-side-key::after {
+				content: var(--profile-now, '');
+			}
+
+			.profile-side-val {
+				color: var(--profile-val, var(--cream-dim));
+				font-size: 0.92rem;
+				line-height: 1.55;
+			}
+
+			.profile-side-val code {
+				color: inherit;
+				font-family: var(--font-mono);
+				font-size: 0.86em;
+			}
+
+			/* margin-top:auto lines the buttons up across cards of unequal height */
+			.profile-card .btn {
+				align-self: start;
+				margin-top: auto;
+				padding-inline: 1.2em;
+				font-size: 0.85rem;
+			}
+
+			/* One switch per viewport; the four properties above read it back. */
+			@media (max-width: 767px) {
+				.profile-side[data-side='mobile'] {
+					--profile-rule: var(--iris);
+					--profile-key: var(--iris-text);
+					--profile-val: var(--cream);
+					--profile-now: ' · now';
+				}
+			}
+
+			@media (min-width: 768px) {
+				.profile-side[data-side='desktop'] {
+					--profile-rule: var(--iris);
+					--profile-key: var(--iris-text);
+					--profile-val: var(--cream);
+					--profile-now: ' · now';
+				}
+			}
+
+			/* ---- Code ---- */
+			.code-block {
+				max-width: 100%;
+				margin-top: 1.5rem;
+				padding: 1.25rem 1.4rem;
+				color: var(--text);
+				background: var(--bg-well);
+				border: 1px solid var(--border);
+				border-radius: 10px;
+				font-family: var(--font-mono);
+				font-size: 0.82rem;
+				line-height: 1.75;
+				overflow-x: auto;
+				white-space: pre;
+				-webkit-overflow-scrolling: touch;
+			}
+
+			.hl-tag {
+				color: var(--iris-text);
+			}
+
+			.hl-attr {
+				color: #8fd8c8;
+			}
+
+			.hl-val {
+				color: #efb59c;
+			}
+
+			.hl-cm {
+				color: var(--text-dim);
+				font-style: italic;
+			}
+
+			.event-log {
+				height: 172px;
+				margin-top: 1rem;
+				padding: 1rem;
+				color: var(--cream-dim);
+				background: var(--bg-well);
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				font-family: var(--font-mono);
+				font-size: 0.86rem;
+				line-height: 1.6;
+				overflow: auto;
+				white-space: pre-wrap;
+			}
+
+			/* ---- Lab ----
+			   Segmented buttons and two dials. Every control writes one attribute
+			   onto the lab sheet, and the snippet below is re-read off that same
+			   element afterwards — so the markup on screen cannot drift from the
+			   DOM it claims to describe. */
+			.lab-grid {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 1rem;
+				margin-top: 1.5rem;
+			}
+
+			/* One rounded box per attribute. Full-width by default; the two
+			   route/snap groups sit side by side as halves. */
+			.lab-group {
+				grid-column: 1 / -1;
+				min-width: 0;
+				padding: 1.1rem 1.25rem 1.25rem;
+				border: 1px solid var(--border);
+				border-radius: 12px;
+			}
+
+			.lab-group-half {
+				grid-column: auto;
+			}
+
+			.lab-group-title {
+				display: block;
+				margin-bottom: 0.9rem;
+				color: var(--cream);
+				font-family: var(--font-mono);
+				font-size: 0.78rem;
+				font-weight: 700;
+				letter-spacing: 0.24em;
+				text-transform: uppercase;
+			}
+
+			.lab-hint {
+				display: block;
+				margin: -0.5rem 0 0.7rem;
+				color: var(--text-dim);
+				font-family: var(--font-mono);
+				font-size: 0.7rem;
+				font-weight: 700;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+			}
+
+			/* Mobile on the left, desktop on the right — the same split the
+			   component's attributes make. */
+			.lab-cols {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 1.1rem 2rem;
+			}
+
+			.lab-field {
+				min-width: 0;
+			}
+
+			.lab-legend {
+				display: block;
+				margin-bottom: 0.7rem;
+				color: var(--cream-dim);
+				font-family: var(--font-mono);
+				font-size: 0.72rem;
+				font-weight: 700;
+				letter-spacing: 0.2em;
+				text-transform: uppercase;
+			}
+
+			.seg {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.4rem;
+			}
+
+			.seg-btn {
+				padding: 0.45em 0.95em;
+				color: var(--cream-dim);
+				background: transparent;
+				border: 1px solid var(--border-accent);
+				border-radius: 100px;
+				font: inherit;
+				font-size: 0.85rem;
+				font-weight: 500;
+				cursor: pointer;
+				transition:
+					color 0.2s ease,
+					background 0.2s ease,
+					border-color 0.2s ease;
+			}
+
+			.seg-btn:hover {
+				color: var(--iris-text);
+				border-color: var(--iris-dim);
+			}
+
+			.seg-btn:disabled {
+				opacity: 0.35;
+				cursor: not-allowed;
+			}
+
+			/* Selected state reuses the page's inverted pairing: #0b0716 on
+			   --iris-text is 7.9:1, the same figure the solid CTA is built on. */
+			.seg-btn.is-active {
+				color: #0b0716;
+				background: var(--iris-text);
+				border-color: var(--iris-text);
+			}
+
+			.lab-dial {
+				display: grid;
+				grid-template-columns: 1fr auto;
+				align-items: baseline;
+				gap: 0.35rem 0.9rem;
+				margin-bottom: 0.9rem;
+				cursor: pointer;
+			}
+
+			.lab-dial-name {
+				color: var(--cream-dim);
+				font-size: 0.9rem;
+			}
+
+			.lab-value {
+				color: var(--iris-text);
+				font-family: var(--font-mono);
+				font-size: 0.82rem;
+				text-align: right;
+			}
+
+			.lab-dial input[type='range'] {
+				grid-column: 1 / -1;
+				width: 100%;
+				height: 2px;
+				appearance: none;
+				-webkit-appearance: none;
+				background: var(--border-accent);
+				border-radius: 2px;
+				cursor: pointer;
+			}
+
+			.lab-dial input[type='range']::-webkit-slider-thumb {
+				width: 14px;
+				height: 14px;
+				appearance: none;
+				-webkit-appearance: none;
+				background: var(--iris-text);
+				border-radius: 50%;
+				cursor: pointer;
+			}
+
+			.lab-dial input[type='range']::-moz-range-thumb {
+				width: 14px;
+				height: 14px;
+				background: var(--iris-text);
+				border: none;
+				border-radius: 50%;
+				cursor: pointer;
+			}
+
+			.lab-note {
+				margin-top: 0.2rem;
+				color: var(--text-dim);
+				font-size: 0.9rem;
+				line-height: 1.6;
+			}
+
+			.lab-note code {
+				color: var(--cream-dim);
+				font-family: var(--font-mono);
+				font-size: 0.94em;
+			}
+
+			/* The which-half-is-live readout sits between the dial boxes and the
+			   open buttons; without its own margins it hugs both. */
+			#lab-live-note {
+				margin: 1.25rem 0 0.25rem;
+			}
+
+			/* ---- Reference tables ---- */
+			.ref-heading {
+				margin: 2.25rem 0 0.85rem;
+				color: var(--iris-text);
+				font-family: var(--font-mono);
+				font-size: 0.8rem;
+				font-weight: 400;
+				letter-spacing: 0.2em;
+				text-transform: uppercase;
+			}
+
+			.ref-table {
+				border: 1px solid var(--border);
+				border-radius: 10px;
+				overflow: hidden;
+			}
+
+			.ref-row {
+				display: grid;
+				grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 2fr);
+				gap: 1rem;
+				padding: 0.8rem 1rem;
+				border-top: 1px solid var(--border);
+				font-size: 0.94rem;
+				line-height: 1.55;
+				align-items: baseline;
+			}
+
+			.ref-row:first-child {
+				border-top: 0;
+			}
+
+			.ref-head {
+				color: var(--cream-dim);
+				background: rgba(0, 0, 0, 0.24);
+				font-size: 0.8rem;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+			}
+
+			.ref-row code {
+				color: var(--cream);
+				font-family: var(--font-mono);
+				font-size: 0.84rem;
+				overflow-wrap: anywhere;
+			}
+
+			.ref-note {
+				max-width: 700px;
+				margin-top: 0.4rem;
+				font-size: 1.02rem;
+				line-height: 1.72;
+			}
+
+			/* ---- Site footer ---- */
+			.site-foot {
+				width: min(1080px, calc(100% - 2.5rem));
+				margin: 0 auto;
+				padding: 2rem 1.5rem 4rem;
+				border-top: 1px solid var(--border);
+				color: var(--text-dim);
+				font-family: var(--font-mono);
+				font-size: 0.86rem;
+				letter-spacing: 0.05em;
+				text-align: center;
+			}
+
+			.site-foot a {
+				color: var(--iris-text);
+				text-decoration: none;
+				border-bottom: 1px solid transparent;
+				transition: border-color 0.25s ease;
+			}
+
+			.site-foot a:hover {
+				border-bottom-color: var(--iris-dim);
+			}
+
+			/* ---- Sheet interiors ---- */
+			.sheet-header {
+				min-height: 78px;
+				padding-top: 26px;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 1rem;
+				border-bottom: 1px solid var(--border);
+			}
+
+			.sheet-header h3 {
+				color: var(--cream);
+				font-family: var(--font-display);
+				font-size: clamp(1.5rem, 6vw, 2.1rem);
+				font-weight: 400;
+				line-height: 1.15;
+			}
+
+			/* --iris-text on the sheet's own --sheet-panel-background is 7.4:1, the
+			   tightest accent-on-surface pairing on the page and still over 7:1. */
+			.sheet-eyebrow {
+				display: block;
+				color: var(--iris-text);
+				font-family: var(--font-mono);
+				font-size: 0.72rem;
+				font-weight: 400;
+				letter-spacing: 0.2em;
+				text-transform: uppercase;
+			}
+
+			.close-btn {
+				flex: 0 0 auto;
+				width: 38px;
+				height: 38px;
+				border-radius: 50%;
+				font-size: 1.45rem;
+				line-height: 1;
+			}
+
+			.sheet-copy {
+				padding-top: 1.5rem;
+				padding-bottom: 2rem;
+				color: var(--text);
+				font-size: 1.05rem;
+				line-height: 1.7;
+			}
+
+			.sheet-copy p + p,
+			.sheet-copy ul + p,
+			.sheet-copy .row + p,
+			.sheet-copy .controls + p {
+				margin-top: 1rem;
+			}
+
+			.sheet-copy .controls {
+				margin-top: 1rem;
+			}
+
+			/* Search field. It sits at the top of the scrolling region here, but
+			   the touch-action allowance is kept for the case where you put one
+			   in the header: the header takes touch-action: none, and without an
+			   allowance of its own the caret and text selection fight the drag. */
+			.sheet-search {
+				width: 100%;
+				margin: 0 0 1rem;
+				padding: 0.6em 0.9em;
+				color: var(--cream);
+				background: rgba(255, 255, 255, 0.04);
+				border: 1px solid var(--border-accent);
+				border-radius: 8px;
+				font: inherit;
+				font-size: 0.92rem;
+				touch-action: auto;
+			}
+
+			.sheet-search::placeholder {
+				color: var(--cream-dim);
+				opacity: 0.7;
+			}
+
+			.snap-controls {
+				margin-bottom: 1.1rem;
+			}
+
+			.plain-list {
+				list-style: none;
+			}
+
+			.plain-list li {
+				display: flex;
+				justify-content: space-between;
+				gap: 1rem;
+				padding: 0.9rem 0;
+				border-bottom: 1px solid var(--border);
+				color: var(--cream-dim);
+				font-size: 0.98rem;
+			}
+
+			.plain-list li:last-child {
+				border-bottom: 0;
+			}
+
+			.list-name {
+				color: var(--cream);
+			}
+
+			.list-meta {
+				flex: 0 0 auto;
+				color: var(--text-dim);
+				font-family: var(--font-mono);
+				font-size: 0.86rem;
+				white-space: nowrap;
+			}
+
+			.list-detail {
+				display: block;
+				color: var(--text-dim);
+				font-size: 0.88rem;
+			}
+
+			/* Settings and filter rows share a two-column shape */
+			.row {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 1rem;
+				padding: 0.95rem 0;
+				border-bottom: 1px solid var(--border);
+			}
+
+			.row:last-child {
+				border-bottom: 0;
+			}
+
+			.row-label {
+				color: var(--cream);
+				font-size: 0.98rem;
+			}
+
+			.row-value {
+				flex: 0 0 auto;
+				color: var(--text-dim);
+				font-family: var(--font-mono);
+				font-size: 0.86rem;
+			}
+
+			.now-playing {
+				display: flex;
+				align-items: center;
+				gap: 1rem;
+				padding-bottom: 1.25rem;
+				border-bottom: 1px solid var(--border);
+			}
+
+			.now-art {
+				flex: 0 0 auto;
+				width: 62px;
+				height: 62px;
+				background: linear-gradient(145deg, var(--iris-dim), #2a2140);
+				border-radius: 10px;
+			}
+
+			.now-title {
+				color: var(--cream);
+				font-family: var(--font-display);
+				font-size: 1.5rem;
+				line-height: 1.15;
+			}
+
+			.now-artist {
+				color: var(--text-dim);
+				font-size: 0.92rem;
+			}
+
+			.section-label {
+				margin: 1.35rem 0 0.35rem;
+				color: var(--iris-text);
+				font-family: var(--font-mono);
+				font-size: 0.72rem;
+				font-weight: 400;
+				letter-spacing: 0.2em;
+				text-transform: uppercase;
+			}
+
+			sheet-footer {
+				border-top: 1px solid var(--border);
+			}
+
+			.cart-total {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 1rem;
+				margin-bottom: 0.9rem;
+			}
+
+			.cart-total-label {
+				color: var(--text-dim);
+				font-size: 0.85rem;
+				letter-spacing: 0.16em;
+				text-transform: uppercase;
+			}
+
+			.cart-total-value {
+				color: var(--cream);
+				font-family: var(--font-display);
+				font-size: 1.75rem;
+			}
+
+			.confirm-actions {
+				display: flex;
+				gap: 0.75rem;
+			}
+
+			.confirm-actions .btn,
+			.confirm-actions .btn-solid {
+				flex: 1;
+				width: auto;
+				border-radius: 12px;
+				text-align: center;
+			}
+
+			.btn-solid {
+				display: block;
+				width: 100%;
+				padding: 0.9em 1.2em;
+				/* inverted pairing — near-black on iris-text clears 7.9:1 */
+				color: #0b0716;
+				background: var(--iris-text);
+				border: 1px solid var(--iris-text);
+				border-radius: 12px;
+				font: inherit;
+				font-size: 1rem;
+				font-weight: 500;
+				letter-spacing: 0.06em;
+				cursor: pointer;
+				transition: background 0.25s ease;
+			}
+
+			.btn-solid:hover {
+				background: #bcb0fc;
+				border-color: #bcb0fc;
+			}
+
+			/* ---- Demo-only: keep the panels off the full width on a desktop ----
+
+			   Most demos on this page carry breakpoint="9999" on purpose, so the MOBILE
+			   profile stays in force at every width and bottom-sheet snapping is
+			   playable in a desktop browser. That profile is width: 100%, which reads as
+			   a full-bleed bar on a wide screen. Capping the dialog here keeps the
+			   demos honest about the gesture without pretending a phone sheet should
+			   span 1600px.
+
+			   The [data-mode] in the selector is load-bearing, not decoration. The
+			   library's card rule is :has(sheet-panel[data-mode='card'][data-position='bottom'])
+			   — two attribute selectors — and it sets width: auto with a full-viewport
+			   max-width. A single-attribute selector loses to it, so a card-mode bottom
+			   sheet stayed full width while every edge-mode one capped correctly.
+			   Matching the count and landing later in the cascade wins both. */
+			@media (min-width: 768px) {
+				dialog-panel[morph][state]:has(
+						sheet-panel[breakpoint='9999'][data-position='bottom'][data-mode]
+					)
+					> dialog {
+					width: min(480px, calc(100vw - 2 * var(--sheet-card-margin)));
+					max-width: min(480px, calc(100vw - 2 * var(--sheet-card-margin)));
+					left: 0;
+					right: 0;
+					margin-inline: auto;
+				}
+			}
+
+			/* ---- Responsive ---- */
+			@media (max-width: 640px) {
+				.hero {
+					padding-inline: 1rem;
+				}
+
+				.demos {
+					padding-inline: 0.75rem;
+					gap: 2.25rem;
+				}
+
+				.demo-section {
+					padding: 1.75rem 1rem;
+				}
+
+				.stage {
+					padding: 1.25rem 1rem;
+				}
+
+				.ref-row {
+					grid-template-columns: 1fr;
+					gap: 0.3rem;
+				}
+
+				.ref-head {
+					display: none;
+				}
+
+				.code-block {
+					padding-inline: 1rem;
+					font-size: 0.76rem;
+				}
+
+				.lab-grid {
+					gap: 0.75rem;
+				}
+
+				.lab-group {
+					grid-column: 1 / -1;
+					padding: 1rem;
+				}
+
+				.lab-cols {
+					grid-template-columns: 1fr;
+					gap: 1.1rem;
+				}
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				html {
+					scroll-behavior: auto;
+				}
+
+				.demo-section,
+				.btn,
+				.btn-solid,
+				.seg-btn,
+				.hero-badge,
+				.install-value,
+				.dep-badge,
+				.site-foot a {
+					transition: none;
+				}
+
+				.btn:active {
+					transform: none;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<!-- ======== HERO ======== -->
+		<header class="hero">
+			<div class="edge-mark" aria-hidden="true">
+				<span class="edge-mark-snap s20"></span>
+				<span class="edge-mark-snap s55"></span>
+				<span class="edge-mark-snap s90"></span>
+				<span class="edge-mark-bar bottom"></span>
+				<span class="edge-mark-bar left"></span>
+				<span class="edge-mark-bar right"></span>
+			</div>
+
+			<a class="hero-badge" href="https://github.com/magic-spells/sheet">@magic-spells/sheet</a>
+			<h1>Every edge, and a <em>spring</em> home.</h1>
+			<p class="hero-tagline">
+				Bottom, left, right, or a card floating clear of all four sides. Bottom-sheet snap points
+				you can drag between, flicks that step exactly one, and a real spring — not a transition —
+				carrying every landing.
+			</p>
+
+			<div class="install">
+				<span class="install-label" id="install-label">Install</span>
+				<code class="install-value" id="install-value" title="Click to copy"
+					>npm install @magic-spells/sheet @magic-spells/dialog-panel</code
+				>
+				<div class="uses">
+					<span class="uses-label">Uses</span>
+					<a
+						class="dep-badge"
+						href="https://github.com/magic-spells/dialog-panel"
+						target="_blank"
+						rel="noopener"
+						><span class="dep-scope">@magic-spells/</span>dialog-panel</a
+					>
+					<a
+						class="dep-badge"
+						href="https://github.com/magic-spells/physics-engine"
+						target="_blank"
+						rel="noopener"
+						><span class="dep-scope">@magic-spells/</span>physics-engine</a
+					>
+					<a
+						class="dep-badge"
+						href="https://github.com/magic-spells/frame-engine"
+						target="_blank"
+						rel="noopener"
+						><span class="dep-scope">@magic-spells/</span>frame-engine</a
+					>
+				</div>
+			</div>
+
+			<div class="hero-line" aria-hidden="true"></div>
+		</header>
+
+		<!-- ======== SECTIONS ======== -->
+		<main class="demos">
+			<!-- ---- 01 · Snap points ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Snap</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">20vh · 55vh · 90vh</span>
+				</div>
+				<h2>Three heights, and the sheet lands on one.</h2>
+				<p class="demo-desc">
+					<code>snap-points="20vh 55vh 90vh"</code> gives the sheet several resting heights — any
+					CSS length, re-measured on resize. Drag between them from the header, the backdrop, or the
+					content once it hits its scroll top. A flick past <code>0.5 px/ms</code> steps exactly one
+					snap, a slow release lands on the nearest, and a downward flick from the lowest snap
+					dismisses. Snap points are a <strong>mobile-profile</strong> attribute: past
+					<code>breakpoint</code> the list is ignored and the panel carries a single resting size.
+				</p>
+				<div class="stage stage-row">
+					<button class="btn" data-open="bottom-panel">20 · 55 · 90</button>
+					<button class="btn" data-open="peek-full-panel">36 · 97</button>
+					<button class="btn" data-open="ladder-panel">25 · 45 · 68 · 92</button>
+					<output class="readout" id="snap-readout">Not open yet…</output>
+				</div>
+				<pre
+					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">snap-points</span>=<span class="hl-val">"20vh 55vh 90vh"</span> <span class="hl-attr">initial-snap</span>=<span class="hl-val">"1"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">// index, not length — the snap list is ordered as written</span>
+sheet.activeSnap;      <span class="hl-cm">// 1</span>
+sheet.snapTo(<span class="hl-val">2</span>);       <span class="hl-cm">// spring up to 90vh</span>
+
+sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&gt; {
+  console.log(detail); <span class="hl-cm">// { from: 1, to: 2 }</span>
+});</pre>
+			</section>
+
+			<!-- ---- 01b · Flick lab ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Flick lab</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">0.5 px/ms · live release data</span>
+				</div>
+				<h2>Throw it from wherever your thumb leaves it.</h2>
+				<p class="demo-desc">
+					This one opens at <code>20vh</code>. Drag it near the top, then flick up: the target is
+					chosen from the live size at release, not the snap where the drag began — so an up-flick
+					near full height keeps going up. The readout reports each release's velocity, size, and
+					where it resolved.
+				</p>
+				<div class="stage stage-row">
+					<button class="btn" data-open="flick-panel">Open the flick lab</button>
+					<output class="readout" id="flick-readout" aria-live="polite"
+						>No release measured yet…</output
+					>
+				</div>
+				<pre
+					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">snap-points</span>=<span class="hl-val">"20vh 55vh 90vh"</span> <span class="hl-attr">initial-snap</span>=<span class="hl-val">"0"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">// A flick steps one snap from where your thumb is, not from where the drag began.</span>
+<span class="hl-cm">// Drag 20vh → ~88vh and flick up: snap 2 · 90vh, never back down to snap 1 · 55vh.</span></pre>
+			</section>
+
+			<!-- ---- 02 · Side sheets ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Edges</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">bottom · left · right</span>
+				</div>
+				<h2>The same gesture, turned ninety degrees.</h2>
+				<p class="demo-desc">
+					<code>position="left"</code> or <code>position="right"</code> turns the drag horizontal
+					and dismisses toward the edge the sheet came from. A side sheet has one fixed width — the
+					<code>--sheet-active-size</code> token — and ignores <code>snap-points</code>. Both demos
+					pin the mobile profile with <code>breakpoint="9999"</code> so you can try them here.
+				</p>
+				<div class="stage controls">
+					<button class="btn" data-open="left-panel">Open settings</button>
+					<button class="btn" data-open="right-panel">Open filters</button>
+				</div>
+				<pre
+					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">position</span>=<span class="hl-val">"left"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">position</span>=<span class="hl-val">"right"</span> <span class="hl-attr">effect</span>=<span class="hl-val">"slide-fade"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">/* Optional fixed-width override. No width attribute is needed. */</span>
+<span class="hl-attr">#left-panel</span> &gt; <span class="hl-tag">dialog</span> {
+  <span class="hl-attr">--sheet-active-size</span>: <span class="hl-val">24rem</span>;
+}</pre>
+			</section>
+
+			<!-- ---- 03 · Card mode ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Card</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">12px on all sides · 20px radius</span>
+				</div>
+				<h2>Detach it, and the corners stop clashing.</h2>
+				<p class="demo-desc">
+					<code>mode="card"</code> is the same bottom sheet, inset by
+					<code>--sheet-card-margin</code> on the left, right and bottom, with all four corners
+					rounded. Edge mode matches the platform's own sheets; the card reads as a floating object
+					instead. Both buttons open the same queue — same snaps, same gestures, different geometry.
+				</p>
+				<div class="stage controls">
+					<button class="btn" data-open="edge-compare-panel">Edge</button>
+					<button class="btn" data-open="card-panel">Inset card</button>
+				</div>
+				<pre
+					class="code-block"><span class="hl-cm">&lt;!-- edge · flush to the bottom, two corners rounded --&gt;</span>
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">position</span>=<span class="hl-val">"bottom"</span> <span class="hl-attr">snap-points</span>=<span class="hl-val">"45vh 80vh"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">&lt;!-- inset card · detached on three sides, all four corners --&gt;</span>
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">position</span>=<span class="hl-val">"bottom"</span> <span class="hl-attr">mode</span>=<span class="hl-val">"card"</span> <span class="hl-attr">effect</span>=<span class="hl-val">"fade-scale"</span> <span class="hl-attr">snap-points</span>=<span class="hl-val">"45vh 80vh"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">/* sheet.css — geometry only, no script reads it */</span>
+<span class="hl-tag">dialog-panel</span>[<span class="hl-attr">morph</span>][<span class="hl-attr">state</span>]:has(<span class="hl-tag">sheet-panel</span>[<span class="hl-attr">data-mode</span>=<span class="hl-val">'card'</span>][<span class="hl-attr">data-position</span>=<span class="hl-val">'bottom'</span>]) &gt; <span class="hl-tag">dialog</span> {
+  <span class="hl-attr">inset</span>: <span class="hl-val">auto var(--sheet-card-margin) var(--sheet-card-margin)</span>; <span class="hl-cm">/* right · bottom · left */</span>
+  <span class="hl-attr">max-width</span>: <span class="hl-val">calc(100vw - 2 * var(--sheet-card-margin))</span>;
+  <span class="hl-attr">border-radius</span>: <span class="hl-val">var(--sheet-card-border-radius)</span>;
+  <span class="hl-attr">padding-bottom</span>: <span class="hl-val">0</span>; <span class="hl-cm">/* the margin already clears the safe area */</span>
+}
+
+<span class="hl-cm">/* set the gap yourself — 12px reads well down to a 375px viewport */</span>
+<span class="hl-tag">:root</span> { <span class="hl-attr">--sheet-card-margin</span>: <span class="hl-val">12px</span>; <span class="hl-attr">--sheet-card-border-radius</span>: <span class="hl-val">20px</span>; }</pre>
+			</section>
+
+			<!-- ---- 04 · Breakpoint profiles ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Responsive</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">breakpoint 768 · morph 600ms</span>
+				</div>
+				<h2>A bottom sheet on a phone. Something else entirely on a desktop.</h2>
+				<p class="demo-desc">
+					Below <code>breakpoint</code> — 768px by default — the mobile <code>position</code>,
+					<code>mode</code> and <code>effect</code> apply. At or above it, their
+					<code>desktop-*</code> twins take over. Resize across 768px while a sheet is open and it
+					morphs to the new geometry in place: no close and reopen, no lost focus, no lifecycle
+					events. Unset values inherit down the column, with one exception: a
+					<code>bottom</code> sheet becomes a centred dialog on the desktop, because a floating card
+					in the middle of the screen is what a desktop dialog reads as. Say
+					<code>desktop-position="bottom"</code> to keep it on the edge — it sizes to its content
+					there too. <code>snap-points</code> stops applying entirely past the breakpoint: every
+					desktop profile is dismiss-only, with one resting size taken from its content (bottom and
+					centre) or from a CSS token (the sides).
+				</p>
+				<div class="ref-table">
+					<div class="ref-row ref-head">
+						<div>Question</div>
+						<div>Mobile</div>
+						<div>Desktop</div>
+					</div>
+					<div class="ref-row">
+						<div>Which edge?</div>
+						<div><code>position</code></div>
+						<div>
+							<code>desktop-position</code> → <code>center</code> for a
+							<code>bottom</code> position, else <code>position</code>
+						</div>
+					</div>
+					<div class="ref-row">
+						<div>Flush or floating?</div>
+						<div><code>mode</code></div>
+						<div><code>desktop-mode</code></div>
+					</div>
+					<div class="ref-row">
+						<div>How does it arrive?</div>
+						<div><code>effect</code></div>
+						<div><code>desktop-effect</code> → <code>effect</code></div>
+					</div>
+					<div class="ref-row">
+						<div>How does it leave?</div>
+						<div><code>exit-effect</code> → <code>effect</code></div>
+						<div>
+							<code>desktop-exit-effect</code> → <code>exit-effect</code> →
+							<code>desktop-effect</code>
+						</div>
+					</div>
+				</div>
+				<div class="stage">
+					<div class="profile-grid">
+						<div class="profile-card">
+							<h3 class="profile-title">Quick shop</h3>
+							<div class="profile-side" data-side="mobile">
+								<span class="profile-side-key">Mobile</span>
+								<span class="profile-side-val"
+									>Bottom sheet, peeking at <code>48vh</code> and pulling up to <code>92vh</code>.
+									Slides back down to leave.</span
+								>
+							</div>
+							<div class="profile-side" data-side="desktop">
+								<span class="profile-side-key">Desktop</span>
+								<span class="profile-side-val"
+									>Right-hand drawer, floating clear as a card. Shrinks away to leave.</span
+								>
+							</div>
+							<button class="btn" data-open="quickshop-panel">Open</button>
+						</div>
+
+						<div class="profile-card">
+							<h3 class="profile-title">Discard draft</h3>
+							<div class="profile-side" data-side="mobile">
+								<span class="profile-side-key">Mobile</span>
+								<span class="profile-side-val"
+									>Action sheet at <code>34vh</code>, sliding up from the bottom edge.</span
+								>
+							</div>
+							<div class="profile-side" data-side="desktop">
+								<span class="profile-side-key">Desktop</span>
+								<span class="profile-side-val"
+									>Centred modal sized by its own content, fading up in place.</span
+								>
+							</div>
+							<button class="btn" data-open="confirm-panel">Open</button>
+						</div>
+
+						<div class="profile-card">
+							<h3 class="profile-title">Filters</h3>
+							<div class="profile-side" data-side="mobile">
+								<span class="profile-side-key">Mobile</span>
+								<span class="profile-side-val"
+									>Bottom sheet between <code>40vh</code> and <code>88vh</code>.</span
+								>
+							</div>
+							<div class="profile-side" data-side="desktop">
+								<span class="profile-side-key">Desktop</span>
+								<span class="profile-side-val"
+									>Left-hand drawer, a card by default, sliding in from its edge.</span
+								>
+							</div>
+							<button class="btn" data-open="filters-panel">Open</button>
+						</div>
+					</div>
+					<output class="readout" id="width-readout">Measuring the viewport…</output>
+				</div>
+				<pre
+					class="code-block"><span class="hl-cm">// bottom sheet on a phone, right-hand drawer that shrinks away on a desktop</span>
+&lt;<span class="hl-tag">sheet-panel</span>
+  <span class="hl-attr">snap-points</span>=<span class="hl-val">"48vh 92vh"</span>
+  <span class="hl-attr">breakpoint</span>=<span class="hl-val">"768"</span>
+  <span class="hl-attr">desktop-position</span>=<span class="hl-val">"right"</span>
+  <span class="hl-attr">desktop-mode</span>=<span class="hl-val">"card"</span>
+  <span class="hl-attr">desktop-exit-effect</span>=<span class="hl-val">"fade-scale"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">// action sheet on a phone, centred modal on a desktop</span>
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">desktop-position</span>=<span class="hl-val">"center"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;</pre>
+			</section>
+
+			<!-- ---- 04b · Display limit ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Limit</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">max-display-width 900</span>
+				</div>
+				<h2>Or decline to appear at all.</h2>
+				<p class="demo-desc">
+					Above the width you name, <code>show()</code> simply declines, and a sheet already open
+					hides rather than morphing. Use it when the right answer on a wide screen is a different
+					component, not a different profile.
+				</p>
+				<div class="stage stage-row">
+					<button class="btn" data-open="limited-panel">Open below 900px</button>
+					<output class="readout" id="limit-readout">Measuring the viewport…</output>
+				</div>
+				<pre
+					class="code-block"><span class="hl-cm">// declines above the width rather than presenting badly</span>
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">max-display-width</span>=<span class="hl-val">"900"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;</pre>
+			</section>
+
+			<!-- ---- 06 · Effects ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Effects</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">4 named · 1 spring</span>
+				</div>
+				<h2>Four ways to arrive.</h2>
+				<p class="demo-desc">
+					An effect is how the sheet arrives. <code>slide</code> travels in from its edge,
+					<code>slide-fade</code> fades across a short <code>24px</code> slide,
+					<code>fade-scale</code> fades up in place, and <code>pop</code> scales up through a
+					keyframed bounce past rest. The four cards below are identical apart from the attribute.
+				</p>
+				<div class="stage controls">
+					<button class="btn" data-open="effect-slide-panel">slide</button>
+					<button class="btn" data-open="effect-fade-scale-panel">fade-scale</button>
+					<button class="btn" data-open="effect-slide-fade-panel">slide-fade</button>
+					<button class="btn" data-open="effect-pop-panel">pop</button>
+				</div>
+				<pre
+					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">effect</span>=<span class="hl-val">"pop"</span> <span class="hl-attr">desktop-effect</span>=<span class="hl-val">"fade-scale"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">// sheet-engine.js — the hidden endpoint, per effect</span>
+<span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'slide'</span>)      distance = size + inset + cushion;
+<span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'slide-fade'</span>) distance = <span class="hl-val">24</span>,   opacity = <span class="hl-val">0</span>;
+<span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'fade-scale'</span>) scale    = <span class="hl-val">0.95</span>, opacity = <span class="hl-val">0</span>;
+<span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'pop'</span>)        scale    = <span class="hl-val">0.85</span>, opacity = <span class="hl-val">0</span>;</pre>
+			</section>
+
+			<!-- ---- 06b · Leaving ---- -->
+			<section class="demo-section" id="leaving">
+				<div class="spec">
+					<span class="spec-key">Leaving</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">one runway · own effect · lockable</span>
+				</div>
+				<h2>How a sheet leaves.</h2>
+				<p class="demo-desc">
+					A dismissal starts wherever your finger let go, and it always clears the screen fully —
+					the panel's own size, plus any gap it floats by, plus a shadow cushion
+					(<code>--sheet-exit-cushion</code>). <code>exit-effect</code> lets leaving differ from
+					arriving: drag the second card down and it keeps going the way your finger was moving,
+					then shrinks away.
+				</p>
+				<div class="stage controls">
+					<button class="btn" data-open="exit-slide-panel">Swipe down · slide out</button>
+					<button class="btn" data-open="exit-shrink-panel">Swipe down · shrink out</button>
+				</div>
+				<p class="demo-desc">
+					And sometimes a sheet must not be waved away. <code>dismiss="none"</code> closes the
+					swipe, backdrop and Escape routes but keeps the buttons working — the panel still tracks
+					your finger, springs back, and reports each refusal through <code>snaprelease</code>.
+				</p>
+				<div class="stage controls">
+					<button class="btn" data-open="locked-panel">Open the locked confirm</button>
+					<output class="readout" id="locked-readout">Not open yet…</output>
+				</div>
+				<pre
+					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">effect</span>=<span class="hl-val">"slide"</span> <span class="hl-attr">exit-effect</span>=<span class="hl-val">"fade-scale"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">// swipe, backdrop and Escape refused; buttons still work</span>
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">dismiss</span>=<span class="hl-val">"none"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">// or open just some of them</span>
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">dismiss</span>=<span class="hl-val">"backdrop escape"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">// sheet-engine.js — an exit never ends closer to rest than it started</span>
+<span class="hl-tag">const</span> floor = away &gt; <span class="hl-val">0</span> ? away + cushion : <span class="hl-val">0</span>;</pre>
+			</section>
+
+			<!-- ---- 07 · Footer ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Footer</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">flex-shrink: 0</span>
+				</div>
+				<h2>The bar stays put while the list moves.</h2>
+				<p class="demo-desc">
+					Add <code>&lt;sheet-footer&gt;</code> and the sheet becomes a three-part column: header
+					and footer hold still, only the content between them scrolls. The footer takes over the
+					safe-area padding so its background runs to the bottom of the screen, and it is a drag
+					surface on the same terms as the header.
+				</p>
+				<div class="stage controls">
+					<button class="btn" data-open="footer-panel">Open the bag</button>
+				</div>
+				<pre
+					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">snap-points</span>=<span class="hl-val">"35vh 75vh"</span>&gt;
+  &lt;<span class="hl-tag">sheet-header</span>&gt;…&lt;/<span class="hl-tag">sheet-header</span>&gt;   <span class="hl-cm">/* rigid · drag surface */</span>
+  &lt;<span class="hl-tag">sheet-content</span>&gt;…&lt;/<span class="hl-tag">sheet-content</span>&gt; <span class="hl-cm">/* flex: 1 · scrolls    */</span>
+  &lt;<span class="hl-tag">sheet-footer</span>&gt;
+    &lt;<span class="hl-tag">button</span>&gt;Place order&lt;/<span class="hl-tag">button</span>&gt;
+  &lt;/<span class="hl-tag">sheet-footer</span>&gt; <span class="hl-cm">/* rigid · owns the safe area */</span>
+&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">/* sheet.css */</span>
+<span class="hl-tag">sheet-panel</span>[<span class="hl-attr">data-position</span>=<span class="hl-val">'bottom'</span>] <span class="hl-tag">sheet-footer</span> {
+  <span class="hl-attr">padding-bottom</span>: <span class="hl-val">calc(var(--sheet-footer-padding) + env(safe-area-inset-bottom, 0px))</span>;
+}</pre>
+			</section>
+
+			<!-- ---- 08 · Lifecycle ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Lifecycle</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">4 + 2 events</span>
+				</div>
+				<h2>Every open, close and landing leaves a mark.</h2>
+				<p class="demo-desc">
+					Four lifecycle events come from the parent <code>&lt;dialog-panel&gt;</code>;
+					<code>snapchange</code> and <code>snaprelease</code> come from the sheet. All six bubble,
+					so one listener sees the whole cycle, and <code>snapchange</code> fires on commit — never
+					mid-drag. The log below is wired to every panel on this page.
+				</p>
+				<div class="stage">
+					<div class="controls">
+						<button class="btn" data-open="events-panel">Open and log</button>
+						<button class="btn" id="clear-events">Clear log</button>
+					</div>
+					<pre
+						class="event-log"
+						id="event-log"
+						role="log"
+						aria-live="polite"
+						aria-label="Event log">
+Events log</pre>
+				</div>
+				<pre
+					class="code-block"><span class="hl-tag">const</span> panel = document.querySelector(<span class="hl-val">'#account-panel'</span>);
+
+<span class="hl-tag">for</span> (<span class="hl-tag">const</span> name <span class="hl-tag">of</span> [<span class="hl-val">'beforeShow'</span>, <span class="hl-val">'shown'</span>, <span class="hl-val">'beforeHide'</span>, <span class="hl-val">'hidden'</span>]) {
+  panel.addEventListener(name, () =&gt; console.log(name));
+}
+
+<span class="hl-cm">// bubbles up from the sheet, on commit only</span>
+panel.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&gt; {
+  console.log(<span class="hl-val">`snap ${detail.from} → ${detail.to}`</span>);
+});
+
+<span class="hl-cm">// cancelable — this sheet refuses to open</span>
+panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; event.preventDefault());</pre>
+			</section>
+
+			<!-- ---- 09 · Lab ---- -->
+			<section class="demo-section" id="lab-section">
+				<div class="spec">
+					<span class="spec-key">Lab</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">mobile + desktop · exits · routes · 2 dials</span>
+				</div>
+				<h2>Set the dials, and read back the markup.</h2>
+				<p class="demo-desc">
+					Four positions, two geometries and four effects make thirty-two profiles of one panel —
+					and the mobile and desktop halves are dialled separately, split at the real 768px
+					breakpoint. Every setting is a plain attribute or CSS token, no config object. Leave a
+					desktop dial on <em>default</em> and it falls back the documented way: position inherits
+					the mobile one — except a <code>bottom</code>, which becomes a centred dialog — mode
+					becomes a floating card, and the effects follow their chains. The snap switches are a
+					mobile dial: past the breakpoint the panel drops to one resting size, and a desktop
+					<code>bottom</code> takes that size from its own content, just like a centre. Set the
+					dials, then open: the snippet below is re-read from the element itself, so it always shows
+					the real DOM. Resize across the breakpoint with the panel open and it morphs between your
+					two configurations in place. The spring dials govern entrances only; exits and snaps keep
+					their presets.
+				</p>
+
+				<div class="lab-grid">
+					<!-- Each attribute is one boxed group, mobile on the left and
+					     desktop on the right, because that is exactly how the
+					     component thinks about them: one attribute, two profiles.
+					     The desktop columns' "default" removes the attribute, so the
+					     component's documented fallbacks apply: position inherits the
+					     mobile one — except a bottom, which falls out to center — mode
+					     defaults to card, and the effects fall back down their
+					     chains. -->
+					<div class="lab-group">
+						<span class="lab-group-title" id="lab-title-position">Position</span>
+						<div class="lab-cols">
+							<div class="lab-field">
+								<span class="lab-legend" id="lab-legend-position">Mobile</span>
+								<div
+									class="seg"
+									role="group"
+									aria-labelledby="lab-title-position lab-legend-position">
+									<button
+										class="seg-btn is-active"
+										type="button"
+										aria-pressed="true"
+										data-lab-group="position"
+										data-lab-value="bottom">
+										bottom
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="position"
+										data-lab-value="left">
+										left
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="position"
+										data-lab-value="right">
+										right
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="position"
+										data-lab-value="center">
+										center
+									</button>
+								</div>
+							</div>
+							<div class="lab-field">
+								<span class="lab-legend" id="lab-legend-desktop-position">Desktop</span>
+								<div
+									class="seg"
+									role="group"
+									aria-labelledby="lab-title-position lab-legend-desktop-position">
+									<button
+										class="seg-btn is-active"
+										type="button"
+										aria-pressed="true"
+										data-lab-group="desktop-position"
+										data-lab-value="">
+										default
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-position"
+										data-lab-value="bottom">
+										bottom
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-position"
+										data-lab-value="left">
+										left
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-position"
+										data-lab-value="right">
+										right
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-position"
+										data-lab-value="center">
+										center
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="lab-group">
+						<span class="lab-group-title" id="lab-title-mode">Mode</span>
+						<div class="lab-cols">
+							<div class="lab-field">
+								<span class="lab-legend" id="lab-legend-mode">Mobile</span>
+								<div class="seg" role="group" aria-labelledby="lab-title-mode lab-legend-mode">
+									<button
+										class="seg-btn is-active"
+										type="button"
+										aria-pressed="true"
+										data-lab-group="mode"
+										data-lab-value="edge">
+										edge
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="mode"
+										data-lab-value="card">
+										card
+									</button>
+								</div>
+							</div>
+							<div class="lab-field">
+								<span class="lab-legend" id="lab-legend-desktop-mode">Desktop</span>
+								<div
+									class="seg"
+									role="group"
+									aria-labelledby="lab-title-mode lab-legend-desktop-mode">
+									<button
+										class="seg-btn is-active"
+										type="button"
+										aria-pressed="true"
+										data-lab-group="desktop-mode"
+										data-lab-value="">
+										default
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-mode"
+										data-lab-value="edge">
+										edge
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-mode"
+										data-lab-value="card">
+										card
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div class="lab-group">
+						<span class="lab-group-title" id="lab-title-effect">Effect</span>
+						<div class="lab-cols">
+							<div class="lab-field">
+								<span class="lab-legend" id="lab-legend-effect">Mobile</span>
+								<div class="seg" role="group" aria-labelledby="lab-title-effect lab-legend-effect">
+									<button
+										class="seg-btn is-active"
+										type="button"
+										aria-pressed="true"
+										data-lab-group="effect"
+										data-lab-value="slide">
+										slide
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="effect"
+										data-lab-value="fade-scale">
+										fade-scale
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="effect"
+										data-lab-value="slide-fade">
+										slide-fade
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="effect"
+										data-lab-value="pop">
+										pop
+									</button>
+								</div>
+							</div>
+							<div class="lab-field">
+								<span class="lab-legend" id="lab-legend-desktop-effect">Desktop</span>
+								<div
+									class="seg"
+									role="group"
+									aria-labelledby="lab-title-effect lab-legend-desktop-effect">
+									<button
+										class="seg-btn is-active"
+										type="button"
+										aria-pressed="true"
+										data-lab-group="desktop-effect"
+										data-lab-value="">
+										default
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-effect"
+										data-lab-value="slide">
+										slide
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-effect"
+										data-lab-value="fade-scale">
+										fade-scale
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-effect"
+										data-lab-value="slide-fade">
+										slide-fade
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-effect"
+										data-lab-value="pop">
+										pop
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Leaving is a separate question from arriving, so it gets its own
+					     group. "inherit" removes the attribute rather than setting a value,
+					     which is how the sheet goes back to leaving the way it arrived. -->
+					<div class="lab-group">
+						<span class="lab-group-title" id="lab-title-exit">Exit effect</span>
+						<div class="lab-cols">
+							<div class="lab-field">
+								<span class="lab-legend" id="lab-legend-exit">Mobile</span>
+								<div class="seg" role="group" aria-labelledby="lab-title-exit lab-legend-exit">
+									<button
+										class="seg-btn is-active"
+										type="button"
+										aria-pressed="true"
+										data-lab-group="exit-effect"
+										data-lab-value="">
+										inherit
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="exit-effect"
+										data-lab-value="slide">
+										slide
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="exit-effect"
+										data-lab-value="fade-scale">
+										fade-scale
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="exit-effect"
+										data-lab-value="slide-fade">
+										slide-fade
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="exit-effect"
+										data-lab-value="pop">
+										pop
+									</button>
+								</div>
+							</div>
+							<div class="lab-field">
+								<span class="lab-legend" id="lab-legend-desktop-exit">Desktop</span>
+								<div
+									class="seg"
+									role="group"
+									aria-labelledby="lab-title-exit lab-legend-desktop-exit">
+									<button
+										class="seg-btn is-active"
+										type="button"
+										aria-pressed="true"
+										data-lab-group="desktop-exit-effect"
+										data-lab-value="">
+										default
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-exit-effect"
+										data-lab-value="slide">
+										slide
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-exit-effect"
+										data-lab-value="fade-scale">
+										fade-scale
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-exit-effect"
+										data-lab-value="slide-fade">
+										slide-fade
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-exit-effect"
+										data-lab-value="pop">
+										pop
+									</button>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- One switch per route, because they are genuinely independent: a
+					     drawer that a stray swipe must not close can still be
+					     dismissed by clicking outside it. All three off is dismiss="none". -->
+					<div class="lab-group lab-group-half">
+						<span class="lab-group-title" id="lab-legend-dismiss">Dismiss routes</span>
+						<div class="seg" role="group" aria-labelledby="lab-legend-dismiss">
+							<button
+								class="seg-btn is-active"
+								type="button"
+								aria-pressed="true"
+								data-lab-route="swipe">
+								swipe
+							</button>
+							<button
+								class="seg-btn is-active"
+								type="button"
+								aria-pressed="true"
+								data-lab-route="backdrop">
+								backdrop
+							</button>
+							<button
+								class="seg-btn is-active"
+								type="button"
+								aria-pressed="true"
+								data-lab-route="escape">
+								escape
+							</button>
+						</div>
+					</div>
+
+					<!-- One switch per snap rather than a preset picker: any combination
+					     is legal. With none selected the attribute is absent, so the
+					     default 85vh snap applies. -->
+					<div class="lab-group lab-group-half" id="lab-snap-field">
+						<span class="lab-group-title" id="lab-legend-snaps">Snap points</span>
+						<span class="lab-hint">mobile bottom only · none = 85vh</span>
+						<div class="seg" role="group" aria-labelledby="lab-legend-snaps">
+							<button
+								class="seg-btn is-active"
+								type="button"
+								aria-pressed="true"
+								data-lab-snap="36vh">
+								36vh
+							</button>
+							<button
+								class="seg-btn is-active"
+								type="button"
+								aria-pressed="true"
+								data-lab-snap="66vh">
+								66vh
+							</button>
+							<button
+								class="seg-btn is-active"
+								type="button"
+								aria-pressed="true"
+								data-lab-snap="96vh">
+								96vh
+							</button>
+						</div>
+					</div>
+
+					<div class="lab-group">
+						<span class="lab-group-title">Spring · entrances only</span>
+						<label class="lab-dial">
+							<span class="lab-dial-name">Attraction · travel speed</span>
+							<span class="lab-value" id="lab-attraction-val">0.055</span>
+							<input
+								type="range"
+								id="lab-attraction"
+								min="0.01"
+								max="0.4"
+								step="0.005"
+								value="0.055"
+								aria-label="Spring attraction" />
+						</label>
+						<label class="lab-dial">
+							<span class="lab-dial-name">Friction · damping</span>
+							<span class="lab-value" id="lab-friction-val">0.32</span>
+							<input
+								type="range"
+								id="lab-friction"
+								min="0.1"
+								max="0.8"
+								step="0.005"
+								value="0.32"
+								aria-label="Spring friction" />
+						</label>
+						<p class="lab-note" id="lab-spring-note" aria-live="polite">
+							Presets in force — no <code>spring</code> attribute set.
+						</p>
+					</div>
+				</div>
+
+				<!-- Which half of the dials is in force depends only on the viewport,
+				     so it is reported live rather than left for the reader to work out. -->
+				<p class="lab-note" id="lab-live-note" aria-live="polite"></p>
+
+				<div class="stage controls">
+					<button class="btn" data-open="lab-panel">Open the panel</button>
+					<button class="btn" type="button" id="lab-spring-reset">Reset spring</button>
+				</div>
+
+				<!-- Filled by renderLabCode() on load. Left empty here on purpose:
+				     a hand-written starting snippet is just one more thing that can
+				     fall out of step with the panel's real attributes. -->
+				<pre class="code-block" id="lab-code"></pre>
+			</section>
+
+			<!-- ---- 10 · Reference ---- -->
+			<section class="demo-section">
+				<div class="spec">
+					<span class="spec-key">Reference</span>
+					<span class="spec-rule" aria-hidden="true"></span>
+					<span class="spec-val">14 attributes · 25 tokens</span>
+				</div>
+				<h2>Fourteen attributes and twenty-five dials.</h2>
+				<p class="demo-desc">
+					Five elements, fourteen attributes, twenty-five style tokens, three methods, and six
+					events. Everything else is ordinary HTML you write yourself, inside a real native
+					<code>&lt;dialog&gt;</code>.
+				</p>
+				<div class="stage controls">
+					<button class="btn" data-open="api-panel">Open the reference sheet</button>
+				</div>
+				<pre
+					class="code-block"><span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/dialog-panel'</span>;
+<span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/sheet'</span>;
+
+<span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/dialog-panel/css'</span>;
+<span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/sheet/css'</span>;
+
+<span class="hl-tag">const</span> sheet = document.querySelector(<span class="hl-val">'sheet-panel'</span>);
+sheet.show(trigger); <span class="hl-cm">// always open through show(), never dialog.showModal()</span>
+sheet.snapTo(<span class="hl-val">1</span>);
+sheet.hide();</pre>
+
+				<h3 class="ref-heading">Elements</h3>
+				<div class="ref-table">
+					<div class="ref-row ref-head">
+						<div>Element</div>
+						<div>Required</div>
+						<div>Role</div>
+					</div>
+					<div class="ref-row">
+						<div><code>&lt;dialog-panel&gt;</code></div>
+						<div>Yes</div>
+						<div>
+							Peer component. Owns the native dialog, the backdrop, and the lifecycle events.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>&lt;sheet-panel&gt;</code></div>
+						<div>Yes</div>
+						<div>Presentation and gestures. Resolves the active profile and drives the spring.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>&lt;sheet-header&gt;</code></div>
+						<div>Recommended</div>
+						<div>
+							Draws the drag handle on touch screens below the breakpoint. An unconditional drag
+							surface.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>&lt;sheet-content&gt;</code></div>
+						<div>Yes</div>
+						<div>The flexing, scrollable region. Yields the gesture at its scroll edge.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>&lt;sheet-footer&gt;</code></div>
+						<div>Optional</div>
+						<div>Pinned bar. Drag surface, and owns the safe-area padding.</div>
+					</div>
+				</div>
+
+				<h3 class="ref-heading">Attributes</h3>
+				<div class="ref-table">
+					<div class="ref-row ref-head">
+						<div>Attribute</div>
+						<div>Default</div>
+						<div>Description</div>
+					</div>
+					<div class="ref-row">
+						<div><code>snap-points</code></div>
+						<div><code>85vh</code></div>
+						<div>
+							Space-separated CSS lengths — <code>px</code>, <code>vh</code>, <code>dvh</code>,
+							<code>svh</code>, <code>lvh</code>, <code>vw</code>, <code>rem</code>, <code>%</code>.
+							<strong>Mobile bottom sheets only</strong>: ignored by left, right, and center
+							positions, and ignored entirely at or above <code>breakpoint</code>. Resolved at open
+							and on resize.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>initial-snap</code></div>
+						<div>last</div>
+						<div>Zero-based initial bottom-sheet snap on the mobile profile.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>position</code></div>
+						<div><code>bottom</code></div>
+						<div>
+							Mobile placement: <code>bottom</code>, <code>left</code>, <code>right</code>, or
+							<code>center</code>. Center ignores <code>snap-points</code> and <code>mode</code>,
+							takes its width from <code>--sheet-center-width</code>, and takes its height from its
+							own content.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>mode</code></div>
+						<div><code>edge</code></div>
+						<div>
+							Mobile geometry: <code>edge</code> welds it to one side, <code>card</code> insets it
+							on all four.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>effect</code></div>
+						<div><code>slide</code></div>
+						<div>
+							Mobile motion: <code>slide</code>, <code>fade-scale</code>, <code>slide-fade</code>,
+							or <code>pop</code>.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>exit-effect</code></div>
+						<div><code>effect</code></div>
+						<div>Mobile exit effect. Same four values; falls back to <code>effect</code>.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>breakpoint</code></div>
+						<div><code>768</code></div>
+						<div>
+							Viewport width in pixels at or above which the desktop profile applies. Crossing it
+							while open morphs the sheet in place without closing or emitting
+							<code>beforeHide</code> or <code>hidden</code>.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>desktop-position</code></div>
+						<div>
+							<code>center</code> for a <code>bottom</code> mobile position, else that position
+						</div>
+						<div>
+							Desktop placement: the same four values. A bottom sheet falls out to
+							<code>center</code> rather than inheriting itself, because a floating card in the
+							middle of the screen is what a desktop dialog reads as — say
+							<code>desktop-position="bottom"</code> to keep the bottom sheet, which then sizes to
+							its content and stays anchored to the bottom edge, capped by
+							<code>calc(100dvh - 2 * var(--sheet-card-margin))</code>. Center ignores
+							<code>snap-points</code> and <code>mode</code>, takes its width from
+							<code>--sheet-center-width</code>, and takes its height from its own content.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>desktop-mode</code></div>
+						<div><code>card</code></div>
+						<div>Desktop geometry: <code>edge</code> or <code>card</code>.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>desktop-effect</code></div>
+						<div><code>fade-scale</code> for <code>center</code>, else <code>effect</code></div>
+						<div>Desktop motion effect. Same four values.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>desktop-exit-effect</code></div>
+						<div><code>exit-effect</code>, else <code>desktop-effect</code></div>
+						<div>
+							Desktop exit effect. Same four values; falls back through
+							<code>exit-effect</code> to <code>desktop-effect</code>.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>dismiss</code></div>
+						<div>all routes</div>
+						<div>
+							Token list of <code>swipe</code>, <code>backdrop</code>, and <code>escape</code>.
+							Absent opens all three; <code>none</code> or an empty attribute locks all three; any
+							subset opens exactly those routes. Buttons and programmatic <code>hide()</code> still
+							work.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>max-display-width</code></div>
+						<div>none</div>
+						<div>
+							Largest viewport width, in pixels, at which <code>show()</code> will open the sheet.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>spring</code></div>
+						<div>presets</div>
+						<div>
+							Spring override as <code>"attraction friction"</code>, both exclusive of
+							<code>0</code> and <code>1</code>; invalid values are ignored. Governs how the sheet
+							arrives; exits and snaps keep their presets. Also settable as a property:
+							<code>sheet.spring = { attraction, friction }</code>.
+						</div>
+					</div>
+				</div>
+
+				<h3 class="ref-heading">CSS Custom Properties</h3>
+				<div class="ref-table">
+					<div class="ref-row ref-head">
+						<div>Property</div>
+						<div>Default</div>
+						<div>Description</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-active-size</code></div>
+						<div><code>min(26rem, 90vw)</code> on sides</div>
+						<div>
+							The one fixed width of a left or right sheet, and the active snap height of a mobile
+							bottom sheet. Override it in CSS. Never published for a content-sized profile —
+							<code>center</code>, or a desktop <code>bottom</code>.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-panel-background</code></div>
+						<div><code>white</code></div>
+						<div>Panel background.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-panel-border-radius</code></div>
+						<div><code>25px</code></div>
+						<div>Edge-sheet exposed corner radius. The welded corners stay square.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-card-margin</code></div>
+						<div><code>12px</code></div>
+						<div>Card inset from every viewport edge.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-card-border-radius</code></div>
+						<div><code>20px</code></div>
+						<div>Card corner radius, on all four corners.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-panel-box-shadow</code></div>
+						<div>layered shadow</div>
+						<div>Panel elevation.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-handle-color</code></div>
+						<div><code>#bbb</code></div>
+						<div>Drag-handle fill.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-handle-width</code></div>
+						<div><code>50px</code></div>
+						<div>Bottom-sheet handle width.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-handle-height</code></div>
+						<div><code>5px</code></div>
+						<div>Bottom-sheet handle height. Also its corner radius.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-handle-side-length</code></div>
+						<div><code>--sheet-handle-width</code></div>
+						<div>Side-sheet handle length, running down the panel.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-handle-side-thickness</code></div>
+						<div><code>4px</code></div>
+						<div>
+							Side-sheet handle thickness. A left or right sheet takes its pill from this pair, not
+							from the two above.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-handle-offset</code></div>
+						<div><code>8px</code></div>
+						<div>Handle distance from the header's leading edge.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-bleed</code></div>
+						<div><code>120px</code></div>
+						<div>
+							How far the panel background extends past an edge sheet's own edge, so a rubber-band
+							overshoot never exposes the backdrop. Edge modes only.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-content-padding</code></div>
+						<div><code>20px</code></div>
+						<div>Content inset, and the header's horizontal inset.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-footer-padding</code></div>
+						<div><code>--sheet-content-padding</code></div>
+						<div>Footer inset. The safe-area inset is added beyond it.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-footer-background</code></div>
+						<div><code>transparent</code></div>
+						<div>Footer background.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-overlay-background</code></div>
+						<div><code>rgba(0, 0, 0, 0.5)</code></div>
+						<div>Backdrop fill, on the generated <code>&lt;dialog-backdrop&gt;</code>.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-overlay-blur</code></div>
+						<div><code>5px</code></div>
+						<div>Backdrop blur radius.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-desktop-panel-width</code></div>
+						<div><code>min(26rem, 90vw)</code></div>
+						<div>Maximum width of a desktop card.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-center-width</code></div>
+						<div><code>min(28rem, 100vw - 2 * card margin)</code></div>
+						<div>Width of a <code>center</code> dialog; its height follows its content.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-exit-cushion</code></div>
+						<div><code>28px</code></div>
+						<div>
+							How far past its edge a dismissal carries the panel, on top of its size and inset.
+							Raise it to about the shadow blur if the panel leaves a halo behind.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-morph-duration</code></div>
+						<div><code>600ms</code></div>
+						<div>Profile-morph duration; <code>0</code> swaps instantly.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-morph-easing</code></div>
+						<div><code>cubic-bezier(0.34, 1.32, 0.52, 1)</code></div>
+						<div>Profile-morph easing; overshoots slightly by default.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-backdrop-progress</code></div>
+						<div>written per frame</div>
+						<div>
+							Read-only. Drives the overlay from the dismissal zone; always
+							<code>0</code>–<code>1</code>.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-progress</code></div>
+						<div>written per frame</div>
+						<div>
+							Read-only. Exactly what was painted — a bottom sheet publishes its snap breath up to
+							about <code>1.024</code>; no other profile exceeds <code>1</code>.
+						</div>
+					</div>
+				</div>
+
+				<h3 class="ref-heading">Methods &amp; Properties</h3>
+				<div class="ref-table">
+					<div class="ref-row ref-head">
+						<div>Name</div>
+						<div>Type</div>
+						<div>Description</div>
+					</div>
+					<div class="ref-row">
+						<div><code>show(triggerEl)</code></div>
+						<div>method</div>
+						<div>
+							Resolves the active profile and opens through dialog-panel's engine transport. Pass
+							the real opener so focus returns to it.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>hide()</code></div>
+						<div>method</div>
+						<div>Runs the exit spring and closes through dialog-panel.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>snapTo(index)</code></div>
+						<div>method</div>
+						<div>Springs a bottom sheet to a zero-based mobile snap index. Inert on sides.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>activeSnap</code></div>
+						<div>number</div>
+						<div>Current zero-based snap index. Read-only.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>dismissPolicy</code></div>
+						<div>object</div>
+						<div>
+							Read-only <code>{ swipe, backdrop, escape }</code> booleans parsed from
+							<code>dismiss</code>.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>panel</code></div>
+						<div>element</div>
+						<div>Parent <code>&lt;dialog-panel&gt;</code>.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>dialog</code></div>
+						<div>element</div>
+						<div>Parent native <code>&lt;dialog&gt;</code> — the surface the engine animates.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>header</code></div>
+						<div>element</div>
+						<div>Descendant <code>&lt;sheet-header&gt;</code>.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>content</code></div>
+						<div>element</div>
+						<div>Descendant <code>&lt;sheet-content&gt;</code>.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>footer</code></div>
+						<div>element</div>
+						<div>Descendant <code>&lt;sheet-footer&gt;</code>, when present.</div>
+					</div>
+				</div>
+				<p class="ref-note">
+					The fourteen attributes above reflect through their camelCase properties —
+					<code>snapPoints</code>, <code>initialSnap</code>, <code>position</code>,
+					<code>mode</code>, <code>effect</code>, <code>exitEffect</code>, <code>breakpoint</code>,
+					<code>desktopPosition</code>, <code>desktopMode</code>, <code>desktopEffect</code>,
+					<code>desktopExitEffect</code>, <code>dismiss</code>, <code>maxDisplayWidth</code>, and
+					<code>spring</code>.
+				</p>
+
+				<h3 class="ref-heading">Events</h3>
+				<div class="ref-table">
+					<div class="ref-row ref-head">
+						<div>Event</div>
+						<div>Cancelable</div>
+						<div>When it fires</div>
+					</div>
+					<div class="ref-row">
+						<div><code>beforeShow</code></div>
+						<div>Yes</div>
+						<div>Before the opening spring starts.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>shown</code></div>
+						<div>No</div>
+						<div>After the sheet settles and the native dialog enters the top layer.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>beforeHide</code></div>
+						<div>Yes</div>
+						<div>Before the exit spring starts.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>hidden</code></div>
+						<div>No</div>
+						<div>After exit and native dialog cleanup.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>snapchange</code></div>
+						<div>No</div>
+						<div>
+							After the sheet settles on a different snap. Detail is
+							<code>{ from, to }</code> as zero-based indices. Never mid-drag.
+						</div>
+					</div>
+					<div class="ref-row">
+						<div><code>snaprelease</code></div>
+						<div>No</div>
+						<div>
+							After any claimed touch release resolves. Detail includes
+							<code>{ velocity, flick, direction, size, target, prevented }</code>; target is a
+							zero-based snap index or <code>null</code> for dismissal. When <code>dismiss</code>
+							refuses a gesture dismissal, the sheet redirects to the active snap, reports it as
+							<code>target</code>, and sets <code>prevented: true</code>.
+						</div>
+					</div>
+				</div>
+				<p class="ref-note">
+					The first four are dispatched by the parent panel and carry <code>state</code>,
+					<code>triggerElement</code> and <code>result</code> in their detail. The last two are
+					dispatched by the <code>&lt;sheet-panel&gt;</code> itself. All six bubble and are
+					composed.
+				</p>
+
+				<h3 class="ref-heading">Accessibility</h3>
+				<p class="ref-note">
+					Modal semantics, focus trapping, focus return, Escape handling and body scroll lock are
+					delegated to the native <code>&lt;dialog&gt;</code> through the parent panel — the sheet
+					adds no ARIA of its own. Give every dialog an accessible name with
+					<code>aria-labelledby</code> or <code>aria-label</code>, label icon-only buttons, keep a
+					visible close control, and pass the real opener to <code>show()</code>. Any element with
+					<code>data-action-hide-dialog</code> closes the sheet.
+				</p>
+				<p class="ref-note">
+					Never make a drag the only route to an action. Interactive descendants stay clickable
+					because pointer capture is deferred until movement passes <code>5px</code>, and a backdrop
+					gesture under <code>10px</code> and <code>300ms</code> is read as a tap rather than a
+					drag.
+				</p>
+
+				<h3 class="ref-heading">Browser support</h3>
+				<p class="ref-note">
+					Modern browsers with custom elements, native <code>&lt;dialog&gt;</code>, Pointer Events,
+					<code>:has()</code>, custom properties and <code>dvh</code>. Pointer Events mean mouse,
+					pen and touch all take the same path, so every drag on this page works with a mouse.
+				</p>
+			</section>
+		</main>
+
+		<footer class="site-foot">
+			Built for every edge ·
+			<a href="https://github.com/magic-spells/sheet">@magic-spells/sheet</a> · MIT License
+		</footer>
+
+		<!-- ======== SHEETS ======== -->
+
+		<!-- 01 · snap points — a map-style peek / half / full -->
+		<dialog-panel id="bottom-panel">
+			<dialog aria-labelledby="bottom-title">
+				<sheet-panel snap-points="20vh 55vh 90vh" initial-snap="1" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="bottom-title">
+								<span class="sheet-eyebrow">Within 2 miles</span>
+								Nearby
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<!-- The header stays deliberately lean so the 20vh peek still shows a
+						     row or two of list on a 375x667 screen. Search and the snap
+						     controls ride at the top of the scrolling region instead. -->
+						<input
+							class="sheet-search"
+							type="search"
+							placeholder="Search this area"
+							aria-label="Search this area" />
+						<div class="controls snap-controls">
+							<button class="btn" data-snap="0">Peek</button>
+							<button class="btn" data-snap="1">Half</button>
+							<button class="btn" data-snap="2">Full</button>
+						</div>
+						<ul class="plain-list">
+							<li>
+								<span class="list-name"
+									>Fen &amp; Rye
+									<span class="list-detail">Bakery · closes at 4</span>
+								</span>
+								<span class="list-meta">0.2 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>The Wick
+									<span class="list-detail">Coffee · open until 6</span>
+								</span>
+								<span class="list-meta">0.3 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Harbour Books
+									<span class="list-detail">Bookshop · open until 7</span>
+								</span>
+								<span class="list-meta">0.4 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Salt Yard
+									<span class="list-detail">Wine bar · opens at 5</span>
+								</span>
+								<span class="list-meta">0.6 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Morning Glass
+									<span class="list-detail">Coffee · closes at 2</span>
+								</span>
+								<span class="list-meta">0.7 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Ostrich Lane
+									<span class="list-detail">Records · open until 8</span>
+								</span>
+								<span class="list-meta">0.8 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Pell &amp; Co
+									<span class="list-detail">Hardware · closes at 5</span>
+								</span>
+								<span class="list-meta">0.9 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>The Long Room
+									<span class="list-detail">Pub · open until 11</span>
+								</span>
+								<span class="list-meta">1.1 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Verge
+									<span class="list-detail">Plants · closes at 6</span>
+								</span>
+								<span class="list-meta">1.2 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Bellwether
+									<span class="list-detail">Cheesemonger · closes at 6</span>
+								</span>
+								<span class="list-meta">1.3 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Tin Shed
+									<span class="list-detail">Bicycle repair · closes at 5</span>
+								</span>
+								<span class="list-meta">1.5 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Quiet Street
+									<span class="list-detail">Picture framing · by appointment</span>
+								</span>
+								<span class="list-meta">1.6 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>The Aviary
+									<span class="list-detail">Tea room · open until 6</span>
+								</span>
+								<span class="list-meta">1.8 mi</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Corner Larder
+									<span class="list-detail">Grocer · open until 9</span>
+								</span>
+								<span class="list-meta">2.0 mi</span>
+							</li>
+						</ul>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 01 · two far-apart snaps: preview, or commit. Nothing in between. -->
+		<dialog-panel id="peek-full-panel">
+			<dialog aria-labelledby="peek-full-title">
+				<sheet-panel snap-points="36vh 97vh" initial-snap="0" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="peek-full-title">
+								<span class="sheet-eyebrow">36vh · 97vh</span>
+								Preview or commit
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Two snaps far apart read as a decision rather than a range: preview at the bottom,
+								commit at the top.
+							</p>
+							<div class="row">
+								<span class="row-label">Lower</span>
+								<span class="row-value">36vh</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Upper</span>
+								<span class="row-value">97vh</span>
+							</div>
+							<p>
+								36vh is also the lowest snap, so a dismissing drag slides the panel away at that
+								height rather than squashing it.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 01 · a tighter ladder — a flick still steps exactly one rung -->
+		<dialog-panel id="ladder-panel">
+			<dialog aria-labelledby="ladder-title">
+				<sheet-panel snap-points="25vh 45vh 68vh 92vh" initial-snap="1" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="ladder-title">
+								<span class="sheet-eyebrow">25 · 45 · 68 · 92vh</span>
+								Four rungs
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Four rungs let the sheet meet the content wherever it suits. A flick past
+								<code>0.5&nbsp;px/ms</code> still moves exactly one rung, so a hard throw from the
+								bottom lands on 45vh — never straight to the top.
+							</p>
+							<div class="stage-row">
+								<button class="seg-btn" type="button" data-snap="0">25vh</button>
+								<button class="seg-btn" type="button" data-snap="1">45vh</button>
+								<button class="seg-btn" type="button" data-snap="2">68vh</button>
+								<button class="seg-btn" type="button" data-snap="3">92vh</button>
+							</div>
+							<p>
+								Those buttons call <code>snapTo(index)</code> directly, which springs to a rung
+								without a gesture.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 01b · flick lab — starts low so a drag can cross both higher snaps -->
+		<dialog-panel id="flick-panel">
+			<dialog aria-labelledby="flick-title">
+				<sheet-panel snap-points="20vh 55vh 90vh" initial-snap="0" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="flick-title">
+								<span class="sheet-eyebrow">20vh · 55vh · 90vh</span>
+								Flick lab
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<output
+								class="readout flick-sheet-readout"
+								id="flick-sheet-readout"
+								aria-live="polite"
+								>Drag, release, and this will report the exact decision…</output
+							>
+							<p>
+								Start at the peek, pull this panel near full height, then flick up. The live
+								position should resolve to <code>snap 2 · 90vh</code>, never back down to
+								<code>snap 1 · 55vh</code>.
+							</p>
+							<div class="controls snap-controls">
+								<button class="btn" data-snap="0">20vh</button>
+								<button class="btn" data-snap="1">55vh</button>
+								<button class="btn" data-snap="2">90vh</button>
+							</div>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 02a · left sheet — settings -->
+		<dialog-panel id="left-panel">
+			<dialog aria-labelledby="left-title">
+				<sheet-panel position="left" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="left-title">
+								<span class="sheet-eyebrow">Preferences</span>
+								Settings
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<div class="row">
+								<span class="row-label">Appearance</span>
+								<span class="row-value">Dark</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Playback quality</span>
+								<span class="row-value">High</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Downloads</span>
+								<span class="row-value">Wi-Fi only</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Notifications</span>
+								<span class="row-value">Mentions</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Storage used</span>
+								<span class="row-value">2.4 GB</span>
+							</div>
+							<p>Drag left, or flick, to move this panel back toward the edge it came from.</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 02b · right sheet — filters -->
+		<dialog-panel id="right-panel">
+			<dialog aria-labelledby="right-title">
+				<sheet-panel position="right" breakpoint="9999" effect="slide-fade">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="right-title">
+								<span class="sheet-eyebrow">128 results</span>
+								Filters
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<div class="row">
+								<span class="row-label">Sort</span>
+								<span class="row-value">Newest</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Availability</span>
+								<span class="row-value">In stock</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Price</span>
+								<span class="row-value">Up to $80</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Material</span>
+								<span class="row-value">Linen, wool</span>
+							</div>
+							<p>
+								One fixed width: <code>min(26rem, 90vw)</code> from the
+								<code>--sheet-active-size</code> CSS fallback. Set that token in your stylesheet to
+								override it; <code>snap-points</code> is ignored for side positions.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 03a · edge mode. Identical to #card-panel below apart from mode and
+		     effect, so the geometry is the only thing that reads differently. -->
+		<dialog-panel id="edge-compare-panel">
+			<dialog aria-labelledby="edge-compare-title">
+				<sheet-panel position="bottom" snap-points="45vh 80vh" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="edge-compare-title">
+								<span class="sheet-eyebrow">Edge · flush on three sides</span>
+								Queue
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="now-playing">
+							<div class="now-art" aria-hidden="true"></div>
+							<div>
+								<div class="now-title">Low Country</div>
+								<div class="now-artist">Wren Alder · Tideline</div>
+							</div>
+						</div>
+						<h4 class="section-label">Up next</h4>
+						<ul class="plain-list">
+							<li>
+								<span class="list-name"
+									>Hollow Hour
+									<span class="list-detail">Wren Alder</span>
+								</span>
+								<span class="list-meta">4:12</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Copper Wire
+									<span class="list-detail">The Longer Way</span>
+								</span>
+								<span class="list-meta">3:47</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Second Thaw
+									<span class="list-detail">Marisol Vane</span>
+								</span>
+								<span class="list-meta">5:03</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Nightbus
+									<span class="list-detail">Halden Row</span>
+								</span>
+								<span class="list-meta">2:58</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Salt Flats
+									<span class="list-detail">Wren Alder</span>
+								</span>
+								<span class="list-meta">6:21</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>A Held Note
+									<span class="list-detail">Ivo Kessler</span>
+								</span>
+								<span class="list-meta">3:30</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Weather, Later
+									<span class="list-detail">The Longer Way</span>
+								</span>
+								<span class="list-meta">4:44</span>
+							</li>
+						</ul>
+						<div class="sheet-copy">
+							<p>
+								Full width, flush to the bottom, and only the two top corners rounded. Close this
+								and open the inset card — same list, same snaps, detached on all three sides.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 03b · card mode — the same queue, detached on left, right and bottom -->
+		<dialog-panel id="card-panel">
+			<dialog aria-labelledby="card-title">
+				<sheet-panel
+					position="bottom"
+					mode="card"
+					effect="fade-scale"
+					breakpoint="9999"
+					snap-points="45vh 80vh">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="card-title">
+								<span class="sheet-eyebrow">Inset card · 12px all round</span>
+								Queue
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="now-playing">
+							<div class="now-art" aria-hidden="true"></div>
+							<div>
+								<div class="now-title">Low Country</div>
+								<div class="now-artist">Wren Alder · Tideline</div>
+							</div>
+						</div>
+						<h4 class="section-label">Up next</h4>
+						<ul class="plain-list">
+							<li>
+								<span class="list-name"
+									>Hollow Hour
+									<span class="list-detail">Wren Alder</span>
+								</span>
+								<span class="list-meta">4:12</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Copper Wire
+									<span class="list-detail">The Longer Way</span>
+								</span>
+								<span class="list-meta">3:47</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Second Thaw
+									<span class="list-detail">Marisol Vane</span>
+								</span>
+								<span class="list-meta">5:03</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Nightbus
+									<span class="list-detail">Halden Row</span>
+								</span>
+								<span class="list-meta">2:58</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Salt Flats
+									<span class="list-detail">Wren Alder</span>
+								</span>
+								<span class="list-meta">6:21</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>A Held Note
+									<span class="list-detail">Ivo Kessler</span>
+								</span>
+								<span class="list-meta">3:30</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Weather, Later
+									<span class="list-detail">The Longer Way</span>
+								</span>
+								<span class="list-meta">4:44</span>
+							</li>
+						</ul>
+						<div class="sheet-copy">
+							<p>
+								A gap on the left, the right and the bottom, and all four corners rounded — so the
+								card's radius never has to agree with the display's. The snaps are unchanged.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 04a · breakpoint profile -->
+		<dialog-panel id="quickshop-panel">
+			<dialog aria-labelledby="quickshop-title">
+				<sheet-panel
+					snap-points="48vh 92vh"
+					initial-snap="0"
+					desktop-position="right"
+					desktop-mode="card"
+					desktop-exit-effect="fade-scale">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="quickshop-title">
+								<span class="sheet-eyebrow">bottom → right drawer</span>
+								Merino Crew
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<div class="row">
+								<span class="row-label">Price</span>
+								<span class="row-value">$148.00</span>
+							</div>
+							<p>Size</p>
+							<div class="stage-row">
+								<button class="seg-btn" type="button">XS</button>
+								<button class="seg-btn" type="button">S</button>
+								<button class="seg-btn is-active" type="button">M</button>
+								<button class="seg-btn" type="button">L</button>
+								<button class="seg-btn" type="button">XL</button>
+							</div>
+							<p>
+								A peek at 48vh that pulls up to 92vh on a phone, and a right-hand drawer at or above
+								768px. Drag the window across the breakpoint with this open and watch the box travel
+								rather than close.
+							</p>
+							<p>
+								The exits differ too: on a phone it slides back down, while the desktop drawer
+								shrinks away via <code>desktop-exit-effect="fade-scale"</code>.
+							</p>
+						</div>
+					</sheet-content>
+					<sheet-footer>
+						<div class="cart-total">
+							<span class="cart-total-label">Total</span>
+							<span class="cart-total-value">$148.00</span>
+						</div>
+						<button class="btn-solid" type="button">Add to cart</button>
+					</sheet-footer>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 04 · action sheet on mobile, centred dialog on desktop.
+		     Deliberately short content: a centred dialog is sized by what is inside
+		     it, so a long list would simply hit max-height and read as a full-height
+		     panel rather than as a modal. -->
+		<dialog-panel id="confirm-panel">
+			<dialog aria-labelledby="confirm-title">
+				<sheet-panel
+					snap-points="34vh"
+					effect="slide"
+					desktop-position="center"
+					desktop-effect="fade-scale">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="confirm-title">
+								<span class="sheet-eyebrow">bottom → centred dialog</span>
+								Discard draft?
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								This draft has unsaved changes. Discarding cannot be undone. On a desktop this is a
+								centred modal; it is still swipe-dismissible, so pull it downward to send it away.
+							</p>
+						</div>
+					</sheet-content>
+					<sheet-footer>
+						<button class="btn-solid" type="button" data-action-hide-dialog>Discard</button>
+					</sheet-footer>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 04 · the third edge -->
+		<dialog-panel id="filters-panel">
+			<dialog aria-labelledby="filters-title">
+				<sheet-panel snap-points="40vh 88vh" desktop-position="left" desktop-effect="slide">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="filters-title">
+								<span class="sheet-eyebrow">bottom → left drawer</span>
+								Refine
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<div class="row">
+								<span class="row-label">In stock only</span>
+								<span class="row-value">On</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Price</span>
+								<span class="row-value">Under $200</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Colour</span>
+								<span class="row-value">Any</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Material</span>
+								<span class="row-value">Wool</span>
+							</div>
+							<p>
+								<code>desktop-mode</code> is left at its <code>card</code> default here, so the
+								desktop drawer floats by <code>--sheet-card-margin</code> rather than sitting flush.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 04b · display width limit -->
+		<dialog-panel id="limited-panel">
+			<dialog aria-labelledby="limited-title">
+				<sheet-panel position="left" max-display-width="900" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="limited-title">
+								<span class="sheet-eyebrow">max-display-width 900</span>
+								Narrow screens only
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Above 900px, <code>show()</code> returns without opening. No profile switch, no
+								fallback — the component simply declines and leaves the decision to you.
+							</p>
+							<p>
+								On a wider screen this is where you would reach for a centred dialog or an inline
+								panel instead.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 06 · effects — four identical cards, one variable -->
+		<dialog-panel id="effect-slide-panel">
+			<dialog aria-labelledby="effect-slide-title">
+				<sheet-panel mode="card" effect="slide" breakpoint="9999" snap-points="46vh">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="effect-slide-title">
+								<span class="sheet-eyebrow">effect="slide"</span>
+								Travels the whole way
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Starts fully off its edge and travels the whole way in. Nothing fades, nothing
+								scales.
+							</p>
+							<p>The default, and the right choice for anything welded to an edge.</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<dialog-panel id="effect-fade-scale-panel">
+			<dialog aria-labelledby="effect-fade-scale-title">
+				<sheet-panel mode="card" effect="fade-scale" breakpoint="9999" snap-points="46vh">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="effect-fade-scale-title">
+								<span class="sheet-eyebrow">effect="fade-scale"</span>
+								Arrives in place
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Opacity from <code>0</code>, scale from <code>0.95</code>, no translation at all.
+								The card appears where it belongs rather than travelling to get there.
+							</p>
+							<p>
+								A centred dialog uses this by default. Anything else inherits
+								<code>effect</code>, so say <code>desktop-effect="fade-scale"</code> to get it.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<dialog-panel id="effect-slide-fade-panel">
+			<dialog aria-labelledby="effect-slide-fade-title">
+				<sheet-panel mode="card" effect="slide-fade" breakpoint="9999" snap-points="46vh">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="effect-slide-fade-title">
+								<span class="sheet-eyebrow">effect="slide-fade"</span>
+								A short walk in
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								<code>24px</code> of edge-directed travel while the opacity comes up. Just enough
+								motion to say which direction the sheet belongs to.
+							</p>
+							<p>The most restrained of the four, and the easiest to repeat often.</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<dialog-panel id="effect-pop-panel">
+			<dialog aria-labelledby="effect-pop-title">
+				<sheet-panel mode="card" effect="pop" breakpoint="9999" snap-points="46vh">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="effect-pop-title">
+								<span class="sheet-eyebrow">effect="pop"</span>
+								Lets the spring show
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Scale from <code>0.85</code> while the opacity comes up, then past rest to
+								<code>1.05</code> before settling. The bounce is written into the keyframes, not
+								borrowed from the spring — <code>pop</code>'s spring does not overshoot at all.
+							</p>
+							<p>
+								Open it right after <code>fade-scale</code> — same family, very different arrival.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 06b · leaving. The pair differs ONLY in exit-effect, so swiping both
+		     downward is a clean A/B of what the exit track does with a live drag
+		     pose: one carries on off the edge, the other carries on past the release
+		     pose by a cushion and then shrinks away. -->
+		<dialog-panel id="exit-slide-panel">
+			<dialog aria-labelledby="exit-slide-title">
+				<sheet-panel mode="card" effect="slide" breakpoint="9999" snap-points="46vh">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="exit-slide-title">
+								<span class="sheet-eyebrow">exit-effect · inherited</span>
+								Slides back out
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Say nothing and leaving mirrors arriving. Drag this downward and release: it carries
+								on the way your finger was going and travels clear off the bottom edge.
+							</p>
+							<p>
+								It is a card floating <code>--sheet-card-margin</code> off that edge, and the exit
+								clears that gap too — nothing left showing.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<dialog-panel id="exit-shrink-panel">
+			<dialog aria-labelledby="exit-shrink-title">
+				<sheet-panel
+					mode="card"
+					effect="slide"
+					exit-effect="fade-scale"
+					breakpoint="9999"
+					snap-points="46vh">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="exit-shrink-title">
+								<span class="sheet-eyebrow">exit-effect="fade-scale"</span>
+								Shrinks away
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Arrives on a slide, leaves on a shrink. Drag it downward and release: it keeps
+								moving the way your finger was going while it shrinks, so the exit continues the
+								gesture instead of contradicting it.
+							</p>
+							<p>Dismissed from rest — by a button, say — it scales down exactly in place.</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<dialog-panel id="locked-panel">
+			<dialog aria-labelledby="locked-title">
+				<sheet-panel snap-points="52vh" effect="slide" desktop-position="center" dismiss="none">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="locked-title">
+								<span class="sheet-eyebrow">dismiss="none"</span>
+								Delete this account?
+							</h3>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								No close button, and no way around it. Swipe it, throw it, click the overlay, press
+								Escape — all four refuse, and the panel springs back rather than sitting where you
+								left it.
+							</p>
+							<p>The two buttons still work — they are the answer, not a way out of answering.</p>
+						</div>
+					</sheet-content>
+					<sheet-footer>
+						<div class="confirm-actions">
+							<button class="btn" type="button" data-action-hide-dialog>Keep it</button>
+							<button class="btn-solid" type="button" data-action-hide-dialog>Delete</button>
+						</div>
+					</sheet-footer>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 07 · footer — an elegant bag -->
+		<dialog-panel id="footer-panel">
+			<dialog aria-labelledby="footer-title">
+				<sheet-panel snap-points="35vh 75vh" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="footer-title">
+								<span class="sheet-eyebrow">5 items</span>
+								Your bag
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<ul class="plain-list">
+							<li>
+								<span class="list-name"
+									>Linen apron
+									<span class="list-detail">Natural · one size</span>
+								</span>
+								<span class="list-meta">$48.00</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Stoneware mug
+									<span class="list-detail">Ash glaze · set of two</span>
+								</span>
+								<span class="list-meta">$36.00</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Beeswax candle
+									<span class="list-detail">Unscented · 40 hours</span>
+								</span>
+								<span class="list-meta">$22.00</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Cotton tea towel
+									<span class="list-detail">Woven stripe · pair</span>
+								</span>
+								<span class="list-meta">$18.00</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Olive wood spoon
+									<span class="list-detail">Hand finished</span>
+								</span>
+								<span class="list-meta">$14.00</span>
+							</li>
+						</ul>
+						<div class="sheet-copy">
+							<p>
+								Scroll this list at either snap and the bar below holds still. It is a sibling of
+								the content, not part of it.
+							</p>
+							<div class="controls">
+								<button class="btn" data-snap="0">35vh</button>
+								<button class="btn" data-snap="1">75vh</button>
+							</div>
+						</div>
+					</sheet-content>
+					<sheet-footer>
+						<div class="cart-total">
+							<span class="cart-total-label">Subtotal</span>
+							<span class="cart-total-value">$138.00</span>
+						</div>
+						<button class="btn-solid" data-action-hide-dialog>Place order</button>
+					</sheet-footer>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 08 · lifecycle -->
+		<dialog-panel id="events-panel">
+			<dialog aria-labelledby="events-title">
+				<sheet-panel snap-points="30vh 60vh 88vh" initial-snap="0" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="events-title">
+								<span class="sheet-eyebrow">Lifecycle</span>
+								Watch the log
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								<code>beforeShow</code> and <code>shown</code> have already fired. Move between the
+								three snaps to add <code>snapchange</code> lines, then close to finish the cycle.
+							</p>
+							<div class="controls">
+								<button class="btn" data-snap="0">30vh</button>
+								<button class="btn" data-snap="1">60vh</button>
+								<button class="btn" data-snap="2">88vh</button>
+							</div>
+							<p>
+								Dismissing by flick logs exactly the same pair as pressing the close button — the
+								route out does not change the record.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 09 · lab. Every attribute here is written by the controls in
+		     #lab-section; the values below are only the starting position. -->
+		<dialog-panel id="lab-panel">
+			<dialog aria-labelledby="lab-title">
+				<sheet-panel position="bottom" mode="edge" effect="slide" snap-points="36vh 66vh 96vh">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="lab-title">
+								<span class="sheet-eyebrow">Your configuration</span>
+								Notifications
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<div class="row">
+								<span class="row-label">Replies</span>
+								<span class="row-value">Push</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Mentions</span>
+								<span class="row-value">Push · email</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Weekly digest</span>
+								<span class="row-value">Sunday</span>
+							</div>
+							<div class="row">
+								<span class="row-label">Product news</span>
+								<span class="row-value">Off</span>
+							</div>
+							<p>
+								This panel is running exactly the attribute set printed under the controls. Close
+								it, turn something, and open it again.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 10 · reference -->
+		<dialog-panel id="api-panel">
+			<dialog aria-labelledby="api-title">
+				<sheet-panel position="right" mode="card" breakpoint="9999">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="api-title">
+								<span class="sheet-eyebrow">Reference</span>
+								Small on purpose
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+					</sheet-header>
+					<sheet-content>
+						<div class="sheet-copy">
+							<p>
+								Compose the sheet with ordinary HTML, style it through custom properties, and listen
+								on the parent panel. There is no configuration object and no theme system.
+							</p>
+							<p>
+								Everything the tables describe is running in this card right now — including the
+								handle you are about to grab.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<script type="module">
+			import './vendor/dialog-panel.esm.js';
+			import './dist/sheet.esm.js';
+
+			const $ = (selector, root = document) => root.querySelector(selector);
+
+			// ---- Click to copy the install command ----
+			// The <code> is also user-select: all, so a failed or blocked clipboard
+			// write still leaves the whole command selected in one click.
+			const install = $('.install');
+			const installValue = $('#install-value');
+			const installLabel = $('#install-label');
+			let copiedTimer = 0;
+
+			installValue.addEventListener('click', async () => {
+				try {
+					await navigator.clipboard.writeText(installValue.textContent.trim());
+					install.classList.add('copied');
+					installLabel.textContent = 'Copied';
+					clearTimeout(copiedTimer);
+					copiedTimer = setTimeout(() => {
+						install.classList.remove('copied');
+						installLabel.textContent = 'Install';
+					}, 1400);
+				} catch {
+					/* selection fallback — the command is already highlighted */
+				}
+			});
+
+			// ---- Event log ----
+			const log = $('#event-log');
+			const EMPTY_LOG = 'Events log';
+			const write = (message) => {
+				if (log.textContent === EMPTY_LOG) log.textContent = '';
+				log.textContent += `\n${new Date().toLocaleTimeString()}  ${message}`;
+				log.scrollTop = log.scrollHeight;
+			};
+
+			$('#clear-events').addEventListener('click', () => {
+				log.textContent = EMPTY_LOG;
+			});
+
+			// ---- Every [data-open] button opens the sheet inside the named panel ----
+			for (const trigger of document.querySelectorAll('[data-open]')) {
+				trigger.addEventListener('click', () => {
+					const panel = document.querySelector(`#${trigger.dataset.open}`);
+					panel.querySelector('sheet-panel').show(trigger);
+				});
+			}
+
+			// ---- In-sheet [data-snap] buttons call snapTo() on their own sheet ----
+			for (const button of document.querySelectorAll('[data-snap]')) {
+				button.addEventListener('click', () => {
+					button.closest('sheet-panel').snapTo(Number(button.dataset.snap));
+				});
+			}
+
+			// ---- Lifecycle and snapchange, on every panel on the page ----
+			for (const panel of document.querySelectorAll('dialog-panel')) {
+				for (const type of ['beforeShow', 'shown', 'beforeHide', 'hidden']) {
+					panel.addEventListener(type, () => write(`${panel.id}: ${type}`));
+				}
+				panel.addEventListener('snapchange', (event) => {
+					write(`${panel.id}: snapchange ${event.detail.from} → ${event.detail.to}`);
+				});
+				panel.addEventListener('snaprelease', (event) => {
+					const target = event.detail.target === null ? 'dismiss' : `snap ${event.detail.target}`;
+					write(`${panel.id}: snaprelease → ${target}`);
+				});
+			}
+
+			// ---- Snap readout ----
+			// Labels mirror the snap-points attribute on #bottom-panel, in order.
+			const snapPanel = $('#bottom-panel');
+			const snapSheet = snapPanel.querySelector('sheet-panel');
+			const snapReadout = $('#snap-readout');
+			const SNAP_LABELS = ['20vh · peek', '55vh · half', '90vh · full'];
+
+			const describeSnap = (index) => {
+				const label = SNAP_LABELS[index] ?? `index ${index}`;
+				return `activeSnap ${index}\n${label}`;
+			};
+
+			snapPanel.addEventListener('snapchange', (event) => {
+				snapReadout.textContent = describeSnap(event.detail.to);
+			});
+
+			snapPanel.addEventListener('shown', () => {
+				snapReadout.textContent = describeSnap(snapSheet.activeSnap);
+			});
+
+			snapPanel.addEventListener('hidden', () => {
+				snapReadout.textContent = 'dismissed · flicked below the peek';
+			});
+
+			// ---- Flick lab readout ----
+			// snaprelease carries the same live size, measured velocity, and
+			// resolver target the component used for the actual settle.
+			const flickSheet = $('#flick-panel sheet-panel');
+			const flickReadouts = [$('#flick-readout'), $('#flick-sheet-readout')];
+			const FLICK_SNAP_LABELS = ['20vh', '55vh', '90vh'];
+
+			flickSheet.addEventListener('snaprelease', ({ detail }) => {
+				const physicalDirection =
+					detail.direction === 'away' ? 'down' : detail.direction === 'toward' ? 'up' : 'still';
+				const threshold = detail.flick
+					? `flick · ${physicalDirection}`
+					: `below 0.5 · ${physicalDirection}`;
+				const resolved =
+					detail.target === null
+						? 'dismiss'
+						: `snap ${detail.target} · ${FLICK_SNAP_LABELS[detail.target]}`;
+				const sign = detail.velocity > 0 ? '+' : '';
+				const message =
+					`velocity ${sign}${detail.velocity.toFixed(3)} px/ms · ${threshold}\n` +
+					`release ${Math.round(detail.size)}px · ${resolved}`;
+				for (const readout of flickReadouts) readout.textContent = message;
+			});
+
+			// ---- Locked-sheet readout ----
+			// A refused dismissal is only legible if the sheet says so. `prevented`
+			// distinguishes "you threw it and it refused" from "you let go gently and
+			// it returned", which look identical on screen.
+			const lockedSheet = $('#locked-panel sheet-panel');
+			const lockedReadout = $('#locked-readout');
+			if (lockedSheet && lockedReadout) {
+				let refusals = 0;
+				lockedSheet.addEventListener('snaprelease', ({ detail }) => {
+					if (detail.prevented) refusals += 1;
+					const sign = detail.velocity > 0 ? '+' : '';
+					lockedReadout.textContent = detail.prevented
+						? `refused · velocity ${sign}${detail.velocity.toFixed(3)} px/ms\n` +
+							`${refusals} dismissal${refusals === 1 ? '' : 's'} declined — pick a button`
+						: `returned · velocity ${sign}${detail.velocity.toFixed(3)} px/ms\n` +
+							'under the dismissal threshold anyway';
+				});
+				$('#locked-panel').addEventListener('hidden', () => {
+					refusals = 0;
+					lockedReadout.textContent = 'Answered. Reopen to try again…';
+				});
+			}
+
+			// ---- Profile and display-limit readouts ----
+			// Both track the same resize; they answer different questions, so they
+			// live in different sections rather than one combined line.
+			const widthReadout = $('#width-readout');
+			const limitReadout = $('#limit-readout');
+			const updateWidthReadout = () => {
+				const width = window.innerWidth;
+				const desktop = width >= 768;
+				const distance = Math.abs(width - 768);
+				if (widthReadout) {
+					widthReadout.textContent = desktop
+						? `viewport ${width}px · desktop profile\n${distance}px above the breakpoint — narrow past 768 to morph`
+						: `viewport ${width}px · mobile profile\n${distance}px below the breakpoint — widen past 768 to morph`;
+				}
+				if (limitReadout) {
+					limitReadout.textContent =
+						width > 900
+							? `viewport ${width}px · over 900\nshow() declines`
+							: `viewport ${width}px · under 900\nthe sheet opens`;
+				}
+			};
+			updateWidthReadout();
+			window.addEventListener('resize', updateWidthReadout);
+
+			// ---- Lab ----
+			// One rule for the whole section: a control writes an attribute onto
+			// the lab sheet, then the snippet is regenerated by reading that
+			// element back. Nothing here keeps a parallel copy of the state.
+			const labSection = $('#lab-section');
+			const labSheet = $('#lab-panel sheet-panel');
+			const labCode = $('#lab-code');
+			const attractionDial = $('#lab-attraction');
+			const frictionDial = $('#lab-friction');
+			const attractionOut = $('#lab-attraction-val');
+			const frictionOut = $('#lab-friction-val');
+			const springNote = $('#lab-spring-note');
+			const labSnapField = $('#lab-snap-field');
+
+			// Snap points belong to MOBILE bottom sheets. Side positions remove the
+			// attribute and disable this group, retaining each switch's own state
+			// for whenever bottom is selected again. The desktop half of the lab
+			// never consults them at all — past the breakpoint the snap list is
+			// ignored and every profile carries one resting size.
+			const labSnapButtons = [...labSnapField.querySelectorAll('[data-lab-snap]')];
+			const labSnapOn = (button) => button.getAttribute('aria-pressed') === 'true';
+
+			const applyLabSnaps = () => {
+				const bottom = labSheet.getAttribute('position') === 'bottom';
+				labSnapField.setAttribute('aria-disabled', String(!bottom));
+				for (const button of labSnapButtons) button.disabled = !bottom;
+				if (!bottom) {
+					labSheet.removeAttribute('snap-points');
+					return;
+				}
+				const value = labSnapButtons
+					.filter(labSnapOn)
+					.map((button) => button.dataset.labSnap)
+					.join(' ');
+				// Every switch off removes the attribute, so the getter supplies
+				// the default 85vh snap.
+				if (value) labSheet.setAttribute('snap-points', value);
+				else labSheet.removeAttribute('snap-points');
+			};
+
+			// All three routes open is the default, so the attribute stays absent —
+			// the snippet then shows the difference between a plain sheet and one that
+			// has actually been locked down. All three off is `dismiss="none"`.
+			const labRouteButtons = [...labSection.querySelectorAll('[data-lab-route]')];
+			const applyLabDismiss = () => {
+				const open = labRouteButtons.filter(
+					(button) => button.getAttribute('aria-pressed') === 'true'
+				);
+				if (open.length === labRouteButtons.length) labSheet.removeAttribute('dismiss');
+				else if (!open.length) labSheet.setAttribute('dismiss', 'none');
+				else labSheet.setAttribute('dismiss', open.map((b) => b.dataset.labRoute).join(' '));
+			};
+
+			// Printed in this order regardless of the order they were set in, so
+			// the snippet reads the same way twice. Absent attributes are skipped.
+			const LAB_CODE_ATTRS = [
+				'position',
+				'mode',
+				'effect',
+				'exit-effect',
+				'desktop-position',
+				'desktop-mode',
+				'desktop-effect',
+				'desktop-exit-effect',
+				'breakpoint',
+				'snap-points',
+				'dismiss',
+				'spring',
+			];
+
+			const esc = (value) =>
+				String(value)
+					.replace(/&/g, '&amp;')
+					.replace(/</g, '&lt;')
+					.replace(/>/g, '&gt;')
+					.replace(/"/g, '&quot;');
+
+			const renderLabCode = () => {
+				const rows = LAB_CODE_ATTRS.filter((name) => labSheet.hasAttribute(name)).map(
+					(name) =>
+						`  <span class="hl-attr">${esc(name)}</span>=<span class="hl-val">"${esc(labSheet.getAttribute(name))}"</span>`
+				);
+				labCode.innerHTML = [
+					'&lt;<span class="hl-tag">sheet-panel</span>',
+					`${rows.join('\n')}&gt;`,
+					'  <span class="hl-cm">&lt;!-- header · content · optional footer --&gt;</span>',
+					'&lt;/<span class="hl-tag">sheet-panel</span>&gt;',
+				].join('\n');
+			};
+
+			const setSegActive = (group, button) => {
+				for (const sibling of labSection.querySelectorAll(`[data-lab-group="${group}"]`)) {
+					const active = sibling === button;
+					sibling.classList.toggle('is-active', active);
+					sibling.setAttribute('aria-pressed', String(active));
+				}
+			};
+
+			labSection.addEventListener('click', (event) => {
+				// Snaps toggle independently, so they are not a single-select group
+				// and never run through setSegActive.
+				const snap = event.target.closest('[data-lab-snap]');
+				if (snap) {
+					const next = !labSnapOn(snap);
+					snap.setAttribute('aria-pressed', String(next));
+					snap.classList.toggle('is-active', next);
+					applyLabSnaps();
+					renderLabCode();
+					return;
+				}
+
+				// Dismiss routes are independent switches for the same reason snaps are.
+				const route = event.target.closest('[data-lab-route]');
+				if (route) {
+					const next = route.getAttribute('aria-pressed') !== 'true';
+					route.setAttribute('aria-pressed', String(next));
+					route.classList.toggle('is-active', next);
+					applyLabDismiss();
+					renderLabCode();
+					return;
+				}
+
+				const button = event.target.closest('[data-lab-group]');
+				if (!button) return;
+				const { labGroup, labValue } = button.dataset;
+				// An empty value means "inherit", which is the ABSENCE of the attribute
+				// rather than a value of its own — setting exit-effect="" would parse as
+				// no valid effect and fall back anyway, but the snippet would then show a
+				// meaningless empty attribute.
+				if (labValue) labSheet.setAttribute(labGroup, labValue);
+				else labSheet.removeAttribute(labGroup);
+
+				applyLabSnaps();
+				setSegActive(labGroup, button);
+				renderLabCode();
+			});
+
+			// ---- Spring dials ----
+			// The attribute is absent until a dial moves, so the snippet shows the
+			// difference between running on presets and running on an override.
+			const applySpring = (write) => {
+				attractionOut.textContent = attractionDial.value;
+				frictionOut.textContent = frictionDial.value;
+				if (write) {
+					labSheet.setAttribute('spring', `${attractionDial.value} ${frictionDial.value}`);
+				}
+				springNote.innerHTML = labSheet.hasAttribute('spring')
+					? 'Override in force. Entrances only — exits and snaps keep their presets.'
+					: 'Presets in force — no <code>spring</code> attribute set.';
+				renderLabCode();
+			};
+
+			for (const dial of [attractionDial, frictionDial]) {
+				dial.addEventListener('input', () => applySpring(true));
+			}
+
+			$('#lab-spring-reset').addEventListener('click', () => {
+				labSheet.removeAttribute('spring');
+				attractionDial.value = attractionDial.defaultValue;
+				frictionDial.value = frictionDial.defaultValue;
+				applySpring(false);
+			});
+
+			// The mobile and desktop dials are both always writable; which set is
+			// IN FORCE depends only on the viewport, so report it live. Reading
+			// `labSheet.breakpoint` rather than hard-coding 768 keeps this true
+			// if the panel's markup ever pins a different breakpoint.
+			const labLiveNote = $('#lab-live-note');
+			const updateLabLiveNote = () => {
+				const desktop = window.innerWidth >= labSheet.breakpoint;
+				labLiveNote.innerHTML = desktop
+					? `viewport ${window.innerWidth}px · the <strong>desktop</strong> dials are live — narrow under ${labSheet.breakpoint}px for mobile, or with the panel open to watch it morph`
+					: `viewport ${window.innerWidth}px · the <strong>mobile</strong> dials are live — widen past ${labSheet.breakpoint}px for desktop, or with the panel open to watch it morph`;
+			};
+			updateLabLiveNote();
+			window.addEventListener('resize', updateLabLiveNote);
+
+			// First paint reads the markup rather than a defaults table, so the
+			// starting snippet is true even if the panel's attributes are edited.
+			applyLabSnaps();
+			applyLabDismiss();
+			applySpring(false);
+		</script>
+	</body>
+</html>

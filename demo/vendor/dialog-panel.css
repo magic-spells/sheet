@@ -1,0 +1,239 @@
+/**
+ * dialog-panel basic centered modal styles
+ *
+ * This provides a simple fade in/out animation for a centered modal dialog.
+ * Developers can customize or replace these styles to match their design.
+ */
+
+/* Wrapper doesn't affect layout */
+dialog-panel {
+	display: contents;
+}
+
+/* Base dialog styles with transitions */
+dialog-panel > dialog {
+	border: none;
+	padding: 0;
+	max-width: 32rem;
+	width: 90vw;
+	max-height: 85vh;
+	overflow: visible;
+	box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+
+	/* Start hidden */
+	opacity: 0;
+	transform: scale(0.95);
+
+	/* Transition always defined on base */
+	transition:
+		opacity 0.3s ease-out,
+		transform 0.3s ease-out;
+}
+
+/* When using dialog-backdrop element, make native ::backdrop transparent
+   but keep it clickable (clicks detected via bounding rect check) */
+dialog-panel:has(dialog-backdrop) > dialog::backdrop {
+	background: transparent;
+}
+
+/* Native backdrop (when not using dialog-backdrop) */
+dialog-panel:not(:has(dialog-backdrop)) > dialog::backdrop {
+	background: rgba(0, 0, 0, 0.3);
+	opacity: 0;
+	transition: opacity 0.3s ease-out;
+}
+
+/* Custom dialog-backdrop element.
+
+   The z-index is deliberately modest and tokenized. An extreme value
+   (this used to be 9999999) puts a backdrop-filter-capable layer at the
+   very top of the stacking order, and every showModal() top-layer
+   insertion then forces the compositor to re-sort and re-rasterize
+   around it — a whole-page GPU job landing on the open frame, visible
+   as an intermittent, load-dependent flicker on heavy pages. A sane
+   value keeps the layer order stable across promotion; raise the token
+   only as far as the page's own stacking actually requires. */
+dialog-backdrop {
+	position: fixed;
+	background: rgba(0, 0, 0, 0.3);
+	opacity: 0;
+	transition: opacity 0.3s ease-out;
+	pointer-events: none;
+	z-index: var(--dialog-backdrop-z-index, 1000);
+	top: 50%;
+	left: 50%;
+	width: 200vw;
+	height: 200dvh;
+	transform: translateY(-50%) translateX(-50%);
+}
+
+/* Showing state - dialog is open but still at initial values
+   (this is the starting point for the fade-in animation) */
+dialog-panel[state='showing'] > dialog {
+	opacity: 0;
+	transform: scale(0.95);
+}
+
+dialog-panel:not(:has(dialog-backdrop))[state='showing']
+	> dialog::backdrop {
+	opacity: 0;
+}
+
+/* Shown state - fully visible (animates from showing → shown) */
+dialog-panel[state='shown'] > dialog {
+	opacity: 1;
+	transform: scale(1);
+}
+
+dialog-panel:not(:has(dialog-backdrop))[state='shown']
+	> dialog::backdrop {
+	opacity: 1;
+}
+
+/* Hiding state - faster exit animation */
+dialog-panel[state='hiding'] > dialog {
+	opacity: 0;
+	transform: scale(0.95);
+	transition:
+		opacity 0.2s ease-in,
+		transform 0.2s ease-in;
+}
+
+dialog-panel:not(:has(dialog-backdrop))[state='hiding']
+	> dialog::backdrop {
+	opacity: 0;
+	transition: opacity 0.2s ease-in;
+}
+
+/* dialog-backdrop state animations */
+dialog-panel[state='showing'] > dialog-backdrop,
+dialog-panel[state='hidden'] > dialog-backdrop {
+	opacity: 0;
+	pointer-events: none;
+}
+
+dialog-panel[state='shown'] > dialog-backdrop {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+dialog-panel[state='hiding'] > dialog-backdrop {
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.2s ease-in;
+}
+
+/* ============================================================
+   Position variants — drawer-style slide-in animations.
+   Self-contained: declares its own `position: fixed` and
+   explicit inset values so it doesn't rely on the UA's
+   `dialog:modal` styling or on consumer body overflow rules.
+   Default (no position attr) uses the centered fade/scale
+   animation defined above.
+   ============================================================ */
+
+/* Shared base for all four drawer positions */
+dialog-panel[position='top'] > dialog,
+dialog-panel[position='right'] > dialog,
+dialog-panel[position='bottom'] > dialog,
+dialog-panel[position='left'] > dialog {
+	position: fixed;
+	margin: 0;
+	max-width: 100%;
+	opacity: 1;
+}
+
+/* ---- Top drawer ---- */
+dialog-panel[position='top'] > dialog {
+	top: 0;
+	right: 0;
+	bottom: auto;
+	left: 0;
+	width: 100%;
+	max-height: 85vh;
+	transform: translateY(-100%);
+}
+
+dialog-panel[position='top'][state='shown'] > dialog {
+	transform: translateY(0);
+}
+
+/* ---- Bottom drawer ---- */
+dialog-panel[position='bottom'] > dialog {
+	top: auto;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	width: 100%;
+	max-height: 85vh;
+	transform: translateY(100%);
+}
+
+dialog-panel[position='bottom'][state='shown'] > dialog {
+	transform: translateY(0);
+}
+
+/* ---- Left drawer ---- */
+dialog-panel[position='left'] > dialog {
+	top: 0;
+	right: auto;
+	bottom: 0;
+	left: 0;
+	width: min(24rem, 90vw);
+	height: 100dvh;
+	max-height: 100dvh;
+	transform: translateX(-100%);
+}
+
+dialog-panel[position='left'][state='shown'] > dialog {
+	transform: translateX(0);
+}
+
+/* ---- Right drawer ---- */
+dialog-panel[position='right'] > dialog {
+	top: 0;
+	right: 0;
+	bottom: 0;
+	left: auto;
+	width: min(24rem, 90vw);
+	height: 100dvh;
+	max-height: 100dvh;
+	transform: translateX(100%);
+}
+
+dialog-panel[position='right'][state='shown'] > dialog {
+	transform: translateX(0);
+}
+
+/* ============================================================
+   Page scroll lock — prevents the underlying page from
+   scrolling while any dialog-panel is open or animating.
+   Keyed on the package's own [state='*'] attributes so it
+   activates from the first frame of the opening animation
+   and stays through the closing animation, regardless of
+   when the native <dialog>'s [open] attribute is toggled.
+   ============================================================ */
+body:has(dialog-panel[state='showing']),
+body:has(dialog-panel[state='shown']),
+body:has(dialog-panel[state='hiding']) {
+	overflow: hidden;
+}
+
+/* Morph transport — the engine owns opacity, transforms, and transitions */
+dialog-panel[morph] > dialog,
+dialog-panel[morph][state] > dialog {
+	position: fixed;
+	inset: 0;
+	margin: auto;
+	max-width: none;
+	max-height: none;
+	opacity: 1;
+	transform: none;
+	transition: none;
+}
+
+/* Bring in the scrim during the outbound morph flight */
+dialog-panel[morph][state='showing'] > dialog-backdrop {
+	opacity: 1;
+	pointer-events: auto;
+}
