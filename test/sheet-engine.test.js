@@ -1914,6 +1914,77 @@ test('a snapped sheet is fully opaque by the time it reaches its lowest snap', a
 	engine.destroy();
 });
 
+test('an oscillating entrance never walks the backdrop backwards', async (t) => {
+	// dismissalZoneProgress saturates the top, so overshoot past rest cannot
+	// lighten the overlay -- but a spring loose enough to oscillate comes back
+	// DOWN through rest on every return swing, and that dip is below the
+	// saturation band where the clamp has nothing to say. The panel is meant to
+	// bounce; the scrim is a fade, not a tracker.
+	const frames = captureFrames(t);
+	const engine = new SheetEngine();
+	engine.setProfile(profileFor('bottom', { effect: 'pop', viewportWidth: 420 }));
+	engine.setSnaps([414], 0);
+	engine.setSpring({ attraction: 0.2, friction: 0.15 });
+
+	const seen = [];
+	engine.on('change', ({ progress, backdropProgress }) =>
+		seen.push({ progress, backdrop: backdropProgress })
+	);
+	const show = engine.show({ to: makeDialog() });
+	drainFrames(frames);
+	await show;
+
+	assert.ok(
+		Math.max(...seen.map((s) => s.progress)) > 1.05,
+		'the override really does oscillate, or this asserts nothing'
+	);
+	assert.ok(
+		seen.some((s, i) => i > 0 && s.progress < seen[i - 1].progress),
+		'and the panel really does swing back through rest'
+	);
+	const backdrop = seen.map((s) => s.backdrop);
+	const dip = backdrop.findIndex((value, i) => i > 0 && value < backdrop[i - 1]);
+	assert.equal(
+		dip,
+		-1,
+		dip === -1
+			? ''
+			: `the overlay dipped at frame ${dip}: ${backdrop[dip - 1].toFixed(3)} -> ${backdrop[dip].toFixed(3)}`
+	);
+	assert.equal(engine.backdropProgress, 1, 'and it lands saturated');
+	engine.destroy();
+});
+
+test('an oscillating reversal never walks the exit backdrop forwards', async (t) => {
+	// The same envelope, mirrored: a dismissal reversing out of a bouncy
+	// entrance must keep fading rather than pulsing back up on the swing.
+	const frames = captureFrames(t);
+	const engine = new SheetEngine();
+	engine.setProfile(profileFor('bottom', { effect: 'pop', viewportWidth: 420 }));
+	engine.setSnaps([414], 0);
+	engine.setSpring({ attraction: 0.2, friction: 0.15 });
+
+	const show = engine.show({ to: makeDialog() });
+	for (let index = 0; index < 4; index++) frames.shift()(index * 16.66);
+
+	const backdrop = [];
+	engine.on('change', ({ backdropProgress }) => backdrop.push(backdropProgress));
+	const hide = engine.hide();
+	drainFrames(frames);
+	await Promise.all([show, hide]);
+
+	assert.ok(backdrop.length > 3, 'the exit actually animated');
+	const rise = backdrop.findIndex((value, i) => i > 0 && value > backdrop[i - 1]);
+	assert.equal(
+		rise,
+		-1,
+		rise === -1
+			? ''
+			: `the overlay rose at frame ${rise}: ${backdrop[rise - 1].toFixed(3)} -> ${backdrop[rise].toFixed(3)}`
+	);
+	engine.destroy();
+});
+
 test('a side dismissal continues its drag pose without a backdrop jump', async (t) => {
 	// The exit keeps the drag keyframes and starts the spring where the finger
 	// left the panel, so #currentSize is frozen at the drag value for the whole

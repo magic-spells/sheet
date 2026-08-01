@@ -914,6 +914,8 @@ class SheetEngine extends EventEmitter {
 	#pendingDismissVelocity = 0;
 	#savedInline = null;
 	#backdropProgress = 0;
+	#flightPhase = null;
+	#flightBackdrop = 0;
 	#springOverride = null;
 	#morphing = false;
 
@@ -1632,17 +1634,62 @@ class SheetEngine extends EventEmitter {
 	 */
 	#syncBackdropProgress(p) {
 		const _ = this;
-		const flight = _.#phase === 'showing' || _.#phase === 'hiding' ? clamp(p, 0, 1) : 1;
+		const flying = _.#phase === 'showing' || _.#phase === 'hiding';
+		const flight = flying ? clamp(p, 0, 1) : 1;
 		const clear = _.#settleAction?.backdropClearProgress;
 		if (clear > 0 && clear < 1) {
 			const visibleFlight = clamp((flight - clear) / (1 - clear), 0, 1);
-			_.#backdropProgress = dismissalZoneProgress(_.#currentSize * visibleFlight, _.#snaps[0]);
+			_.#backdropProgress = _.#flightEnvelope(
+				flying,
+				dismissalZoneProgress(_.#currentSize * visibleFlight, _.#snaps[0])
+			);
 			return;
 		}
 		const floor = _.#settleAction?.backdropFloorExtent;
 		const extent =
 			floor === undefined ? _.#currentSize * flight : floor + (_.#currentSize - floor) * flight;
-		_.#backdropProgress = dismissalZoneProgress(extent, _.#snaps[0]);
+		_.#backdropProgress = _.#flightEnvelope(flying, dismissalZoneProgress(extent, _.#snaps[0]));
+	}
+
+	/**
+	 * Holds a flight's overlay monotonic: an entrance may only darken it, an exit
+	 * may only lighten it.
+	 *
+	 * dismissalZoneProgress saturates the top, which is what stops overshoot and
+	 * rubber-band overscroll from lightening the overlay. That covers every
+	 * preset, because none of them oscillate. A public `spring` override can be
+	 * set loose enough to oscillate, and a return swing comes back DOWN through
+	 * rest, into the band below saturation where the clamp has nothing to say —
+	 * so the scrim pulsed 1 -> 0.85 -> 1 -> 0.95 in time with the panel, decaying
+	 * with it. The panel is meant to bounce. The scrim is a fade.
+	 *
+	 * The mark is seeded, not reset, on every phase change, so a reversal starts
+	 * from the opacity already painted rather than snapping. Every entry into a
+	 * flight crosses a phase boundary — `show()` refuses a second showing run and
+	 * `dismiss()` arrives from `shown`/`dragging` — so no explicit reset is
+	 * needed at the four call sites that begin one. Landed phases (`dragging`,
+	 * `snapping`, `returning`, `shown`) are deliberately outside the envelope:
+	 * there the overlay follows the finger, in both directions.
+	 * @param {boolean} flying - True during a `showing` or `hiding` run.
+	 * @param {number} value - The dismissal-zone opacity this frame computed.
+	 * @returns {number} The value, held to the flight's direction.
+	 */
+	#flightEnvelope(flying, value) {
+		const _ = this;
+		if (!flying) {
+			_.#flightPhase = null;
+			return value;
+		}
+		if (_.#flightPhase !== _.#phase) {
+			_.#flightPhase = _.#phase;
+			_.#flightBackdrop = value;
+			return value;
+		}
+		_.#flightBackdrop =
+			_.#phase === 'showing'
+				? Math.max(_.#flightBackdrop, value)
+				: Math.min(_.#flightBackdrop, value);
+		return _.#flightBackdrop;
 	}
 
 	#emitChange() {

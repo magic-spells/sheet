@@ -341,6 +341,26 @@ The overlay tracks the **dismissal zone**, never raw progress. One rule: any pos
 
 Saturation is what stops upward rubber-band overscroll, spring overshoot, and entrance overshoot from lightening the overlay. During the opening/closing flight the panel is full-size but only partly on screen, so flight progress scales the visible extent; that also makes a snapped sheet reach full opacity by the time it passes its lowest snap, so opening to a mid snap never rests under a half-faded overlay.
 
+#### Saturation only holds one end; a flight is monotonic at both
+
+Saturation answers overshoot, and overshoot is all the presets can produce — none of them
+oscillate. A public `spring=` override can be set loose enough to, and an oscillation's return
+swing comes back **down** through rest, into the band below saturation where the clamp has nothing
+to say. The scrim pulsed `1 → 0.85 → 1 → 0.95` in time with the panel and decayed with it; a
+`spring="0.2 0.15"` entrance dipped on 17 separate frames. The panel is meant to bounce — that is
+what the dial is for. The scrim is a fade.
+
+`#flightEnvelope()` holds a flight to its direction: an entrance may only darken the overlay, an
+exit may only lighten it. It applies to `showing` and `hiding` alone. The landed phases —
+`dragging`, `snapping`, `returning`, `shown` — are deliberately outside it, because there the
+overlay follows the finger and must move both ways.
+
+The mark is **seeded on every phase change, never reset to an endpoint**, so a genuine reversal
+starts from the opacity already painted rather than snapping: a `hide()` mid-entrance keeps fading
+down from where the entrance got to. That also means no explicit reset is needed at the four sites
+that begin a flight — every entry crosses a phase boundary, since `show()` refuses a second
+`showing` run and `dismiss()` always arrives from `shown` or `dragging`.
+
 `#currentSize × p` is the visible extent for entrances and non-sliding exits. A slide is the one
 exception because its hidden frame carries an extra shadow cushion beyond the point where its box
 clears the viewport. `exitClearProgress()` derives that edge-crossing point from the same
