@@ -112,6 +112,39 @@ class DragGesture {
 			pointermove: _.#handlePointerMove.bind(_),
 			pointerup: (event) => _.#handlePointerEnd(event, false),
 			pointercancel: (event) => _.#handlePointerEnd(event, true),
+			// An uncaptured pointer that leaves the element never comes back with a
+			// pointerup, so end the gesture here or it is stranded active forever.
+			//
+			// This is a MOUSE-ONLY hole, and that is worth stating so it is not
+			// re-litigated: a direct pointer (touch, or pen in contact) gets implicit
+			// pointer capture to its own pointerdown target, so it keeps targeting
+			// that element wherever it travels and always delivers its own pointerup.
+			// Only a mouse can be pressed on a surface, drifted across the boundary
+			// inside SLOP, and released on the far side.
+			//
+			// Stranded is not merely untidy. Chrome and Firefox give the mouse a
+			// stable pointerId, so the next plain HOVER over the surface still
+			// matches #pointerId, resumes calling onMove, crosses slop and captures a
+			// button-less pointer — after which the consumer follows the bare cursor
+			// around the screen until some unrelated click finally delivers a
+			// pointerup.
+			//
+			// Guarded on #captured because once capture is set the element becomes
+			// the effective target of every pointer event for that pointer, and
+			// boundary events are only re-fired when the capture target itself
+			// changes. So a captured drag cannot fire pointerleave mid-flight and
+			// abort itself; the leave that arrives after an implicit release at
+			// pointerup lands with #active already false and early-returns. The guard
+			// in #handlePointerEnd holds too: pointerleave is a PointerEvent carrying
+			// the id of the pointer that left, so the tracked pointer's leave matches
+			// and a bystander pointer's does not.
+			//
+			// Cancelled, not a clean end: the user did not release here, and zeroed
+			// velocity plus `cancelled: true` is what routes the consumer to a
+			// settle-back. A pointer that wandered off must never be able to dismiss.
+			pointerleave: (event) => {
+				if (!_.#captured) _.#handlePointerEnd(event, true);
+			},
 		};
 
 		for (const [type, handler] of Object.entries(_.#handlers)) {

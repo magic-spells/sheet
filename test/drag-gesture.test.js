@@ -219,12 +219,69 @@ test('DragGesture reports pointer cancellation with zero velocity on both axes',
 	gesture.destroy();
 });
 
+test('DragGesture ends an uncaptured pointer that leaves the element', () => {
+	const el = new StubElement();
+	const calls = [];
+	const gesture = new DragGesture(el, {
+		onStart: () => calls.push('start'),
+		onMove: () => calls.push('move'),
+		onEnd: (info) => calls.push(['end', info]),
+	});
+
+	// A mouse pressed on the surface, drifted across its boundary inside SLOP,
+	// and released on the far side never delivers pointerup here.
+	el.fire('pointerdown', ev({ clientX: 10, clientY: 10, timeStamp: 0 }));
+	el.fire('pointermove', ev({ clientX: 12, clientY: 12, timeStamp: 20 }));
+	el.fire('pointerleave', ev({ clientX: 13, clientY: 13, timeStamp: 40 }));
+
+	const end = calls.at(-1);
+	assert.equal(end[0], 'end', 'the leave must end the gesture');
+	assert.equal(end[1].cancelled, true, 'a wandering pointer must not read as a release');
+	assert.equal(end[1].velocityX, 0);
+	assert.equal(end[1].velocityY, 0);
+	assert.equal(el.capturedPointerId, null);
+
+	// The half that matters. The mouse keeps a stable pointerId, so without the
+	// gesture actually ending, the next plain hover matches #pointerId, resumes
+	// onMove, crosses slop and captures a button-less pointer.
+	calls.length = 0;
+	el.fire('pointermove', ev({ clientX: 200, clientY: 200, timeStamp: 400 }));
+	assert.deepEqual(calls, [], 'a hover after the leave must not re-claim the gesture');
+	assert.equal(el.capturedPointerId, null, 'a button-less pointer must never be captured');
+	gesture.destroy();
+});
+
+test('DragGesture ignores pointerleave once the drag is captured', () => {
+	const el = new StubElement();
+	const calls = [];
+	const gesture = new DragGesture(el, { onEnd: (info) => calls.push(info) });
+
+	el.fire('pointerdown', ev({ clientY: 0, timeStamp: 0 }));
+	el.fire('pointermove', ev({ clientY: 60, timeStamp: 20 }));
+	assert.equal(el.capturedPointerId, 1);
+	// The browser cannot actually deliver this — a captured pointer retargets to
+	// the capturing element and boundary events only re-fire when the capture
+	// target changes — but the guard is what makes that guarantee local.
+	el.fire('pointerleave', ev({ clientY: 400, timeStamp: 40 }));
+	assert.deepEqual(calls, [], 'a captured drag must not abort itself');
+
+	el.fire('pointerup', ev({ clientY: 120, timeStamp: 60 }));
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].cancelled, false);
+	// The implicit release at pointerup is followed by a real pointerleave; the
+	// gesture is already inactive, so it must not end twice.
+	el.fire('pointerleave', ev({ clientY: 120, timeStamp: 62 }));
+	assert.equal(calls.length, 1, 'the post-release leave must be inert');
+	gesture.destroy();
+});
+
 test('DragGesture destroy removes every listener', () => {
 	const el = new StubElement();
 	const gesture = new DragGesture(el);
 	assert.deepEqual([...el.listeners.keys()].sort(), [
 		'pointercancel',
 		'pointerdown',
+		'pointerleave',
 		'pointermove',
 		'pointerup',
 	]);

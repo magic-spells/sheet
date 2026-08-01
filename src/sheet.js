@@ -16,15 +16,19 @@ import { resolveInitialSnap, resolveSnapPoints, resolveSnapTarget } from './snap
 
 const POSITIONS = new Set(['bottom', 'left', 'right', 'center']);
 const MODES = new Set(['edge', 'card']);
-const EFFECTS = new Set(['slide', 'fade-scale', 'slide-fade', 'pop']);
+const EFFECTS = new Set(['slide', 'fade-scale', 'slide-fade']);
 const PROFILE_ATTRIBUTES = new Set([
 	'position',
 	'mode',
 	'breakpoint',
 	'desktop-position',
 	'desktop-mode',
-	'desktop-effect',
+]);
+const EFFECT_ATTRIBUTES = new Set([
 	'effect',
+	'desktop-effect',
+	'exit-effect',
+	'desktop-exit-effect',
 ]);
 const RESIZE_THROTTLE_MS = 100;
 const FLICK_VELOCITY = 0.5;
@@ -143,7 +147,6 @@ class SheetPanel extends HTMLElement {
 	#dialogRef = null;
 	#gestures = [];
 	#scrollVeto = null;
-	#backdropBound = false;
 	#connected = false;
 	#profile = null;
 	#snaps = [];
@@ -190,7 +193,6 @@ class SheetPanel extends HTMLElement {
 		_.#handlers = {
 			beforeShow: () => {
 				if (_.#engine?.state !== 'hiding') _.#setProgress(0);
-				_.#bindBackdrop();
 				_.#prepareOpen();
 			},
 			beforeHide: () => {
@@ -243,7 +245,8 @@ class SheetPanel extends HTMLElement {
 				if (outside) event.stopPropagation();
 			},
 			resize: throttle(() => _.#handleResize(), RESIZE_THROTTLE_MS),
-			change: ({ progress, backdropProgress }) => _.#setProgress(progress, backdropProgress),
+			change: ({ progress, backdropProgress, phase }) =>
+				_.#setProgress(progress, backdropProgress, phase),
 			snapchange: (detail) => {
 				_.#syncActiveSize(detail.to);
 				_.dispatchEvent(
@@ -271,10 +274,11 @@ class SheetPanel extends HTMLElement {
 			return;
 		}
 
-		if (name === 'exit-effect' || name === 'desktop-exit-effect') {
-			// Neither changes resting geometry, so neither earns a morph — a no-op
-			// FLIP measure whose from and to boxes are identical. The engine only
-			// needs the new value in hand for the next dismissal.
+		if (EFFECT_ATTRIBUTES.has(name)) {
+			// An entrance or exit effect changes no resting geometry, so none earns
+			// a morph — a no-op FLIP whose identical boxes never emit transitionend
+			// and park the engine until the safety timeout. Apply the live profile
+			// directly so the next flight uses the new choreography immediately.
 			if (_.panel?.isOpen) _.#applyProfile(_.#resolveProfile());
 			return;
 		}
@@ -282,14 +286,20 @@ class SheetPanel extends HTMLElement {
 		if (PROFILE_ATTRIBUTES.has(name) && _.panel?.isOpen) {
 			// Same treatment as a breakpoint crossing: retarget the open panel
 			// rather than closing it. This is what lets a consumer flip
-			// position/mode/effect live and watch the sheet travel to its new
-			// geometry.
+			// position/mode live and watch the sheet travel to its new geometry.
 			_.#morphToProfile();
 			return;
 		}
 
 		if (name === 'snap-points' || name === 'initial-snap') {
-			_.#prepareOpen();
+			// Same refusal the resize path makes, and for the same reason: setSnaps
+			// rewrites #currentSize to the active snap, which discards a live
+			// gesture's pose. #dragMove measures displacement continuously from
+			// pointerdown, so a moving finger repaints the correct pose on its very
+			// next move and only a finger held still stays jumped — but the release
+			// settle or the next open re-measures either way, so there is nothing to
+			// gain by doing it under the finger.
+			if (!_.#drag.active) _.#prepareOpen();
 		}
 	}
 
@@ -394,7 +404,6 @@ class SheetPanel extends HTMLElement {
 		_.#panelRef = null;
 		_.#dialogRef = null;
 		_.#profile = null;
-		_.#backdropBound = false;
 		_.#drag = { active: false };
 		_.removeAttribute('engine');
 	}
@@ -430,9 +439,10 @@ class SheetPanel extends HTMLElement {
 		const _ = this;
 		if (!_.#engine || !_.#snaps.length) return;
 		const requestedIndex = Number(index);
+		// Still guarded here: the engine's own clamp truncates first, and
+		// Math.trunc(NaN) propagates straight through it into a snap lookup.
 		if (!Number.isFinite(requestedIndex)) return Promise.resolve(false);
-		const target = Math.min(_.#snaps.length - 1, Math.max(0, Math.trunc(requestedIndex)));
-		return _.#engine.settleTo(target, 0);
+		return _.#engine.settleTo(requestedIndex, 0);
 	}
 
 	/** @returns {number} Active snap index. */
@@ -560,18 +570,18 @@ class SheetPanel extends HTMLElement {
 		reflectString(this, 'desktop-mode', value);
 	}
 
-	/** @returns {'slide'|'fade-scale'|'slide-fade'|'pop'} Mobile motion effect. */
+	/** @returns {'slide'|'fade-scale'|'slide-fade'} Mobile motion effect. */
 	get effect() {
 		const value = this.getAttribute('effect');
 		return EFFECTS.has(value) ? value : 'slide';
 	}
 
-	/** @param {'slide'|'fade-scale'|'slide-fade'|'pop'} value - Mobile motion effect. */
+	/** @param {'slide'|'fade-scale'|'slide-fade'} value - Mobile motion effect. */
 	set effect(value) {
 		reflectString(this, 'effect', value);
 	}
 
-	/** @returns {'slide'|'fade-scale'|'slide-fade'|'pop'} Desktop motion effect. */
+	/** @returns {'slide'|'fade-scale'|'slide-fade'} Desktop motion effect. */
 	get desktopEffect() {
 		const value = this.getAttribute('desktop-effect');
 		if (EFFECTS.has(value)) return value;
@@ -589,7 +599,7 @@ class SheetPanel extends HTMLElement {
 		return this.effect;
 	}
 
-	/** @param {'slide'|'fade-scale'|'slide-fade'|'pop'} value - Desktop motion effect. */
+	/** @param {'slide'|'fade-scale'|'slide-fade'} value - Desktop motion effect. */
 	set desktopEffect(value) {
 		reflectString(this, 'desktop-effect', value);
 	}
@@ -603,14 +613,14 @@ class SheetPanel extends HTMLElement {
 	 * than something welded to an edge — and a dismissal that continues a live drag
 	 * carries on outward past the release pose while it does, rather than sliding
 	 * the whole way off a screen it is only occupying part of.
-	 * @returns {'slide'|'fade-scale'|'slide-fade'|'pop'} Mobile exit effect.
+	 * @returns {'slide'|'fade-scale'|'slide-fade'} Mobile exit effect.
 	 */
 	get exitEffect() {
 		const value = this.getAttribute('exit-effect');
 		return EFFECTS.has(value) ? value : this.effect;
 	}
 
-	/** @param {'slide'|'fade-scale'|'slide-fade'|'pop'} value - Mobile exit effect. */
+	/** @param {'slide'|'fade-scale'|'slide-fade'} value - Mobile exit effect. */
 	set exitEffect(value) {
 		reflectString(this, 'exit-effect', value);
 	}
@@ -619,7 +629,7 @@ class SheetPanel extends HTMLElement {
 	 * Desktop exit effect. Falls back to `exit-effect` when that is set explicitly,
 	 * and otherwise to the desktop entrance — so a profile that only names its
 	 * desktop entrance still leaves the way it arrived.
-	 * @returns {'slide'|'fade-scale'|'slide-fade'|'pop'} Desktop exit effect.
+	 * @returns {'slide'|'fade-scale'|'slide-fade'} Desktop exit effect.
 	 */
 	get desktopExitEffect() {
 		const value = this.getAttribute('desktop-exit-effect');
@@ -629,7 +639,7 @@ class SheetPanel extends HTMLElement {
 		return this.desktopEffect;
 	}
 
-	/** @param {'slide'|'fade-scale'|'slide-fade'|'pop'} value - Desktop exit effect. */
+	/** @param {'slide'|'fade-scale'|'slide-fade'} value - Desktop exit effect. */
 	set desktopExitEffect(value) {
 		reflectString(this, 'desktop-exit-effect', value);
 	}
@@ -647,8 +657,8 @@ class SheetPanel extends HTMLElement {
 	 * Overrides spring tuning. Both dials are exclusive of 0 and 1; anything
 	 * else is ignored and the presets stand. Setting null restores them.
 	 *
-	 * The pair replaces the entrance tuning — how the sheet arrives, including
-	 * pop's — but exits and snaps keep their own presets.
+	 * The pair replaces the entrance tuning — how the sheet arrives — but exits
+	 * and snaps keep their own presets.
 	 * @param {{attraction: number, friction: number}|string|null} value - Tuning.
 	 */
 	set spring(value) {
@@ -712,19 +722,12 @@ class SheetPanel extends HTMLElement {
 		this.#gestures.push(new DragGesture(element, this.#surfaceCallbacks(surface)));
 	}
 
-	#bindBackdrop() {
-		const _ = this;
-		if (_.#backdropBound || !_.backdrop) return;
-		_.#gestures.push(new DragGesture(_.backdrop, _.#surfaceCallbacks('backdrop')));
-		_.#backdropBound = true;
-	}
-
 	#surfaceCallbacks(surface) {
 		const _ = this;
 		return {
 			onStart: (info) => _.#dragStart(surface, info?.event),
 			onMove: (info) => _.#dragMove(surface, info),
-			onEnd: (info) => _.#dragEnd(surface, info),
+			onEnd: (info) => _.#dragEnd(info),
 		};
 	}
 
@@ -825,39 +828,19 @@ class SheetPanel extends HTMLElement {
 		}
 	}
 
-	#dragEnd(surface, info) {
+	#dragEnd(info) {
 		const _ = this;
 		const drag = _.#drag;
 		if (!drag.active) return;
 		_.#drag = { active: false };
 
-		// A cancelled pointer is not a tap. pointercancel carries real coordinates
-		// and a real duration, so a pinch-zoom or a system edge-swipe over the
-		// backdrop lands inside the tap thresholds and would close the sheet on a
-		// gesture the user never aimed at it.
-		if (
-			!info.cancelled &&
-			surface === 'backdrop' &&
-			Math.hypot(info.deltaX, info.deltaY) < 10 &&
-			info.duration < 300
-		) {
-			if (_.dismissPolicy.backdrop) _.hide();
-			else if (drag.claimed) {
-				// A claimed micro-drag did move the panel, so a refused tap must
-				// settle it back. Only a never-claimed tap has nothing to restore.
-				const velocityAway = _.#awayVelocity(info.velocityX, info.velocityY);
-				_.#emitSnapRelease(velocityAway, FLICK_VELOCITY, _.#engine.activeSnap, true);
-				_.#settleBack();
-			}
-			return;
-		}
 		if (!drag.claimed) return;
 		if (info.cancelled) {
 			_.#settleBack();
 			return;
 		}
 
-		const velocityAway = _.#awayVelocity(info.velocityX, info.velocityY);
+		const velocityAway = _.#awayOffset(info.velocityX, info.velocityY);
 		const resolved = resolveSnapTarget({
 			currentSize: _.#engine.currentSize,
 			velocityAway,
@@ -871,7 +854,7 @@ class SheetPanel extends HTMLElement {
 		// gone through panel.hide() by then.
 		const prevented = resolved === null && !_.dismissPolicy.swipe;
 		const target = prevented ? _.#engine.activeSnap : resolved;
-		_.#emitSnapRelease(velocityAway, FLICK_VELOCITY, target, prevented);
+		_.#emitSnapRelease(velocityAway, target, prevented);
 
 		if (target === null) {
 			_.#dismiss(Math.max(velocityAway, 0));
@@ -887,14 +870,13 @@ class SheetPanel extends HTMLElement {
 	/**
 	 * Announces a touch release decision.
 	 * @param {number} velocity - Away-signed release velocity in px/ms.
-	 * @param {number} flickVelocity - The threshold this input counts as a flick.
 	 * @param {number|null} target - Snap index actually taken, or null for a
 	 *   dismissal. Reports what happened, never what was merely resolved.
 	 * @param {boolean} [prevented] - True when the gesture resolved to a dismissal
 	 *   that `dismiss` refused, so a consumer can shake the panel or flag the
 	 *   field that still needs an answer.
 	 */
-	#emitSnapRelease(velocity, flickVelocity, target, prevented = false) {
+	#emitSnapRelease(velocity, target, prevented = false) {
 		const _ = this;
 		_.dispatchEvent(
 			new CustomEvent('snaprelease', {
@@ -902,7 +884,7 @@ class SheetPanel extends HTMLElement {
 				composed: true,
 				detail: {
 					velocity,
-					flick: Math.abs(velocity) > flickVelocity,
+					flick: Math.abs(velocity) > FLICK_VELOCITY,
 					direction: velocity > 0 ? 'away' : velocity < 0 ? 'toward' : 'none',
 					size: _.#engine.currentSize,
 					target,
@@ -912,12 +894,10 @@ class SheetPanel extends HTMLElement {
 		);
 	}
 
-	#awayOffset(deltaX, deltaY) {
-		return awayOffset(this.#profile.position, deltaX, deltaY);
-	}
-
-	#awayVelocity(velocityX, velocityY) {
-		return awayOffset(this.#profile.position, velocityX, velocityY);
+	// Away-signed projection of any x/y pair on the dismiss axis. Deltas and
+	// velocities are the same question, so they share the one seam.
+	#awayOffset(x, y) {
+		return awayOffset(this.#profile.position, x, y);
 	}
 
 	#matchesActiveAxis(direction) {
@@ -950,11 +930,7 @@ class SheetPanel extends HTMLElement {
 			// redirect a refused swipe takes. Without it the panel freezes at its
 			// dragged pose, and the queued velocity would leak into the next hide.
 			_.#engine.setDismissVelocity(0);
-			if (_.#profile.position === 'bottom') {
-				_.#engine.settleTo(_.#engine.activeSnap, 0);
-			} else {
-				_.#engine.returnToRest(0);
-			}
+			_.#settleBack();
 		}
 	}
 
@@ -992,7 +968,12 @@ class SheetPanel extends HTMLElement {
 	}
 
 	#profileKey(profile) {
-		return `${profile.desktop}:${profile.position}:${profile.mode}:${profile.effect}`;
+		// A resize cannot change an effect attribute. Crossing the breakpoint is
+		// the only way it can resolve a different effect during resize, and that
+		// already changes `desktop`; position-derived defaults likewise change
+		// `position`. Effect-only attribute changes take the immediate path above,
+		// so including effect here could only manufacture a no-op resize morph.
+		return `${profile.desktop}:${profile.position}:${profile.mode}`;
 	}
 
 	#prepareOpen() {
@@ -1009,19 +990,7 @@ class SheetPanel extends HTMLElement {
 			// MEASURED content height rather than a snap: `snap-points` is a
 			// mobile-profile attribute and is ignored past the breakpoint, exactly
 			// as it is for center — see #measureSnaps and contentSized().
-			let desktopSize = snaps[snaps.length - 1];
-			// Side cards only. The clamp exists to keep a desktop drawer from
-			// stretching past --sheet-desktop-panel-width, and both quantities are
-			// widths. A centered dialog's size is its HEIGHT, so clamping it here
-			// would measure it against the wrong axis entirely.
-			const sideCard =
-				profile.mode === 'card' && (profile.position === 'left' || profile.position === 'right');
-			if (sideCard) {
-				desktopSize = Math.min(
-					desktopSize,
-					_.#probeLength('--sheet-desktop-panel-width', 'min(26rem, 90vw)', window.innerWidth * 0.9)
-				);
-			}
+			const desktopSize = snaps[snaps.length - 1];
 			_.#snaps = [desktopSize];
 			_.#engine.setSnaps(_.#snaps, 0);
 		} else {
@@ -1115,9 +1084,10 @@ class SheetPanel extends HTMLElement {
 	 *
 	 * `--sheet-progress` reports exactly what the engine painted, because it goes
 	 * through the same `paintedProgress()` the engine's `#applyFrame` paints by:
-	 * floored at 0, and capped at 1 only for a non-bottom profile, whose track is
-	 * refused any paint past flush. A bottom sheet's overshoot past 1 is the
-	 * intended settling breath and flows through. `--sheet-backdrop-progress`
+	 * flight phases floor at 0, landed linear tracks may continue below it, and
+	 * only a non-bottom profile is capped at 1 because its track is refused any
+	 * paint past flush. A bottom sheet's overshoot past 1 is the intended settling
+	 * breath and flows through. `--sheet-backdrop-progress`
 	 * drives the overlay and follows the dismissal zone instead, so
 	 * snap-to-snap travel and rubber-band overscroll leave it untouched and it
 	 * always stays in [0, 1]. Both are written in the same call the engine
@@ -1125,8 +1095,9 @@ class SheetPanel extends HTMLElement {
 	 * @param {number} progress - Raw frame progress; overshoots past 1 for a
 	 *   bottom profile, matching what was painted.
 	 * @param {number} [backdropProgress] - Dismissal-zone progress in [0, 1].
+	 * @param {string} [phase] - Motion phase governing lower extrapolation.
 	 */
-	#setProgress(progress, backdropProgress = progress) {
+	#setProgress(progress, backdropProgress = progress, phase) {
 		const _ = this;
 		if (!_.#panelRef) return;
 		const clamp01 = (value) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
@@ -1135,7 +1106,7 @@ class SheetPanel extends HTMLElement {
 		// One rule, one function, shared with the engine that did the painting. An
 		// unresolved profile has no rule to apply, so it falls back to the safe
 		// full clamp.
-		const painted = position ? paintedProgress(position, value) : clamp01(value);
+		const painted = position ? paintedProgress(position, value, phase) : clamp01(value);
 		_.#panelRef.style.setProperty('--sheet-progress', painted.toFixed(3));
 		_.#panelRef.style.setProperty(
 			'--sheet-backdrop-progress',
@@ -1164,13 +1135,34 @@ class SheetPanel extends HTMLElement {
 			return [height || window.innerHeight * 0.5];
 		}
 		if (profile.position !== 'bottom') {
-			return [
-				_.#probeLength(
-					'--sheet-active-size',
-					'min(26rem, 90vw)',
-					Math.min(26 * 16, window.innerWidth * 0.9)
-				),
-			];
+			// Mirror the stylesheet's width expression term for term. The two must
+			// agree exactly: this number IS the painted width, and every dismissal
+			// threshold and exit runway is derived from it.
+			//
+			//   edge  width: var(--sheet-active-size, min(26rem, 90vw))
+			//   card  width: min(var(--sheet-active-size, var(--sheet-desktop-panel-width)),
+			//                    var(--sheet-desktop-panel-width))
+			//
+			// The card row is a `min` of two terms, not a choice between them, and
+			// that is the whole subtlety. `#syncActiveSize` removes the INLINE
+			// `--sheet-active-size` for every side profile, but a consumer sets it in
+			// CSS — that is the documented way to give a side sheet its width — so a
+			// stylesheet value survives and the `min` genuinely binds. Probing the
+			// desktop token alone would ignore it and re-open this same divergence
+			// from the other side: a consumer asking for 300px against a 480px cap
+			// paints 300 and would have measured 480.
+			//
+			// Absence therefore has to be TESTED rather than assumed, because the
+			// inner var()'s fallback is the cap itself — unset resolves to
+			// `min(cap, cap)`, which is not what probing with the generic
+			// `min(26rem, 90vw)` fallback returns. That mismatch was the shipped bug:
+			// a 480px painted card measured 416px.
+			const cssFallback = 'min(26rem, 90vw)';
+			const pixelFallback = Math.min(26 * 16, window.innerWidth * 0.9);
+			const active = () => _.#probeLength('--sheet-active-size', cssFallback, pixelFallback);
+			if (!(profile.desktop && profile.mode === 'card')) return [active()];
+			const cap = _.#probeLength('--sheet-desktop-panel-width', cssFallback, pixelFallback);
+			return [_.#tokenIsSet('--sheet-active-size') ? Math.min(active(), cap) : cap];
 		}
 
 		const dimension = 'height';
@@ -1221,7 +1213,10 @@ class SheetPanel extends HTMLElement {
 	 * measurable at all. That mirrors what SheetEngine already does during the
 	 * closed-dialog flight, and the stylesheet gives the dialog `position: fixed`
 	 * under a `[state]` selector that is always present — so the box it reports
-	 * is the real one, not an in-flow approximation.
+	 * is the real one, not an in-flow approximation. Transform is neutralised for
+	 * every measurement because getBoundingClientRect includes it: otherwise a
+	 * resize during a fade-scale entrance would publish the 0.95-scaled height as
+	 * the profile's intrinsic resting size.
 	 * @param {Object} profile - Profile to measure under.
 	 * @returns {{top: number, left: number, width: number, height: number,
 	 *   borderRadius: string}} The laid-out box.
@@ -1239,6 +1234,7 @@ class SheetPanel extends HTMLElement {
 		const closed = !dialog.open;
 		const savedDisplay = dialog.style.display;
 		const savedVisibility = dialog.style.visibility;
+		const savedTransform = dialog.style.transform;
 
 		_.dataset.position = profile.position;
 		_.dataset.mode = profile.mode;
@@ -1247,10 +1243,11 @@ class SheetPanel extends HTMLElement {
 			dialog.style.display = 'flex';
 			dialog.style.visibility = 'hidden';
 		}
+		dialog.style.transform = 'none';
 
-		const rect = dialog.getBoundingClientRect();
-		const borderRadius = getComputedStyle(dialog).borderRadius;
+		const box = _.#readBox(dialog);
 
+		dialog.style.transform = savedTransform;
 		if (closed) {
 			dialog.style.display = savedDisplay;
 			dialog.style.visibility = savedVisibility;
@@ -1260,13 +1257,7 @@ class SheetPanel extends HTMLElement {
 			else _.dataset[key] = value;
 		}
 
-		return {
-			top: rect.top,
-			left: rect.left,
-			width: rect.width,
-			height: rect.height,
-			borderRadius,
-		};
+		return box;
 	}
 
 	/**
@@ -1288,6 +1279,27 @@ class SheetPanel extends HTMLElement {
 	 * @param {number} [pixelFallback=0] - Value to use when the probe measures nothing.
 	 * @returns {number} Length in pixels.
 	 */
+	/**
+	 * Whether a custom property actually carries a value here.
+	 *
+	 * `#probeLength` cannot answer this — it folds an absent token into its
+	 * fallback, which is exactly the right behaviour for a single-term width and
+	 * exactly the wrong one for a `min()` whose two terms have different
+	 * fallbacks. Read off the dialog for the same reason `#probeLength` is: that
+	 * is the element the geometry rules apply to, so it is where a consumer
+	 * overriding one will have put it.
+	 * @param {string} name - Custom property name.
+	 * @returns {boolean} True when the property resolves to a non-empty value.
+	 */
+	#tokenIsSet(name) {
+		const _ = this;
+		return (
+			getComputedStyle(_.dialog || _)
+				.getPropertyValue(name)
+				.trim() !== ''
+		);
+	}
+
 	#probeLength(name, cssFallback, pixelFallback = 0) {
 		const _ = this;
 		const token =

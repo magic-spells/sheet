@@ -12,6 +12,7 @@ import {
 	buildOpenKeyframes,
 	buildRestKeyframes,
 	dismissalZoneProgress,
+	EFFECT_BLUR,
 	EXIT_CUSHION,
 	exitClearProgress,
 	exitTravel,
@@ -20,9 +21,6 @@ import {
 	parseDismiss,
 	parseSpring,
 	resizesWithSnaps,
-	POP_OVERSHOOT_PERCENT,
-	POP_OVERSHOOT_SCALE,
-	REVEAL_PERCENT,
 	SheetEngine,
 	SPRING_PRESETS,
 	transformOrigin,
@@ -84,6 +82,7 @@ function drainFrames(frames, limit = 1000) {
 		count += 1;
 	}
 	assert.ok(count < limit, 'spring settled before the safety limit');
+	return count;
 }
 
 function makeDialog() {
@@ -153,6 +152,53 @@ test('SheetEngine hide while showing reverses to hidden', async (t) => {
 	engine.destroy();
 });
 
+test('a cancelled entrance rebases onto its configured exit effect', async (t) => {
+	const frames = captureFrames(t);
+	const transforms = [];
+	const opacities = [];
+	const dialog = {
+		style: new Proxy(
+			{},
+			{
+				set(target, property, value) {
+					target[property] = value;
+					if (property === 'transform' && typeof value === 'string') transforms.push(value);
+					if (property === 'opacity' && typeof value === 'string') opacities.push(value);
+					return true;
+				},
+			}
+		),
+	};
+	const engine = new SheetEngine();
+	engine.setProfile(profileFor('bottom', { effect: 'fade-scale', exitEffect: 'slide' }));
+	engine.setSnaps([500], 0);
+
+	const opening = engine.show({ to: dialog });
+	for (let index = 0; index < 5; index++) frames.shift()(index * 16.66);
+	const painted = { ...dialog.style };
+	transforms.length = 0;
+	opacities.length = 0;
+
+	let clearedWithBackdrop = 0;
+	engine.on('change', ({ phase }) => {
+		if (phase !== 'hiding') return;
+		if (translateY(dialog) >= 500 && engine.backdropProgress > 0) clearedWithBackdrop++;
+	});
+	const hiding = engine.hide();
+	assert.deepEqual({ ...dialog.style }, painted, 'the rebase starts at the exact painted pose');
+	assert.equal(drainFrames(frames), 19, 'the rebased exit runs for the exit preset duration');
+	await Promise.all([opening, hiding]);
+
+	assert.equal(
+		transforms.at(-1),
+		'translate3d(0px, 528px, 0px) scale(1)',
+		'the cancelled fade-scale entrance lands on slide exit geometry'
+	);
+	assert.equal(opacities.at(-1), '1', 'the configured exit effect supplies the hidden opacity');
+	assert.equal(clearedWithBackdrop, 0, 'the backdrop is clear on every off-screen frame');
+	engine.destroy();
+});
+
 test('show during a dismissal retargets onto the entrance rest frame', async (t) => {
 	const frames = captureFrames(t);
 	const transforms = [];
@@ -205,7 +251,6 @@ test('show during a dismissal retargets onto the entrance rest frame', async (t)
 test('hide-to-show reversals start at the exact painted exit frame and settle at rest', async (t) => {
 	for (const [label, effect, exitEffect, expectedBackdropBefore, expectedFirstProgress] of [
 		['slide to slide', 'slide', 'slide', 0.34964792986009613, 0.40716959970012173],
-		['pop to pop', 'pop', 'pop', 0.3841362972160001, 0.40700023718185613],
 		[
 			'slide entrance with fade-scale exit',
 			'slide',
@@ -254,9 +299,16 @@ test('hide-to-show reversals start at the exact painted exit frame and settle at
 		const reversalStart = changes.length;
 		const reopening = engine.show({ to: dialog });
 		assert.deepEqual({ ...dialog.style }, painted, `${label} reversal is exactly continuous`);
+		// expectedBackdropBefore, not a constant. A slide exit remaps its backdrop
+		// through backdropClearProgress, so the two slide rows genuinely paint a
+		// LOWER opacity than the raw p x size the other two land on — which is why
+		// that column already varies per row. Seeding the reversal from raw p x size
+		// discarded the remap and shoved those two rows back up to the unremapped
+		// number on the first reversal frame, and this assertion pinned the jump
+		// while its own message claimed the floor was exact. It is exact now.
 		assert.equal(
 			engine.backdropProgress,
-			0.3841362972160001,
+			expectedBackdropBefore,
 			`${label} reversal keeps the exact visible-extent floor`
 		);
 		drainFrames(frames);
@@ -490,7 +542,7 @@ test('SheetEngine clamps height at zero during negative drag overshoot', async (
 // along with it.
 test('non-resizing profiles never carry a size property', () => {
 	for (const position of ['left', 'right', 'center']) {
-		for (const effect of ['slide', 'fade-scale', 'slide-fade', 'pop']) {
+		for (const effect of ['slide', 'fade-scale', 'slide-fade']) {
 			const profile = profileFor(position, { effect });
 			assertNoSizeProperties(buildOpenKeyframes(profile, 400, 400), `open ${position}/${effect}`);
 		}
@@ -521,7 +573,7 @@ test('a desktop bottom profile is content-sized and never carries a size propert
 	assert.equal(resizesWithSnaps(mobile), true, 'a mobile bottom sheet still paints its snaps');
 	assert.equal(resizesWithSnaps(desktop), false);
 
-	for (const effect of ['slide', 'fade-scale', 'slide-fade', 'pop']) {
+	for (const effect of ['slide', 'fade-scale', 'slide-fade']) {
 		const profile = profileFor('bottom', { desktop: true, effect });
 		assertNoSizeProperties(
 			buildOpenKeyframes(profile, 400, 400, 400),
@@ -563,7 +615,7 @@ test('a desktop bottom drag translates its content-sized box instead of resizing
 
 test('entrance and exit tracks expose the same property keys for every profile and effect', () => {
 	for (const position of ['bottom', 'left', 'right', 'center']) {
-		for (const effect of ['slide', 'fade-scale', 'slide-fade', 'pop']) {
+		for (const effect of ['slide', 'fade-scale', 'slide-fade']) {
 			const profile = profileFor(position, { effect });
 			const entrance = buildOpenKeyframes(profile, 400, 400, 200);
 			const exit = buildExitKeyframes(profile, 400, 400, 200, { effect });
@@ -574,6 +626,72 @@ test('entrance and exit tracks expose the same property keys for every profile a
 			);
 		}
 	}
+});
+
+test('every track on every profile and effect carries a filter on every keyframe', () => {
+	// The back-fill trap, one property over from the transform rule. FrameEngine
+	// treats `filter` as composite and back-fills a zeroed default onto any
+	// keyframe that omits it — so one bare frame becomes a hard blur(0px) and
+	// bends the track through it. Asserting presence per FRAME, not per track, is
+	// the point: a track whose ends carry filter and whose reveal frame does not
+	// passes any per-track check and still has the corner.
+	for (const position of ['bottom', 'left', 'right', 'center']) {
+		for (const effect of ['slide', 'fade-scale', 'slide-fade']) {
+			const profile = profileFor(position, { effect });
+			const tracks = {
+				entrance: buildOpenKeyframes(profile, 400, 400, 200),
+				exit: buildExitKeyframes(profile, 400, 400, 200, { effect }),
+				drag: buildDragKeyframes(profile, 400, 400, 400, 200),
+				snap: buildRestKeyframes(profile, 200, 400, 400, 200),
+			};
+			for (const [name, keyframes] of Object.entries(tracks)) {
+				for (const [percent, frame] of Object.entries(keyframes)) {
+					assert.ok(
+						'filter' in frame,
+						`${position}/${effect} ${name} keyframe ${percent} omits filter`
+					);
+				}
+			}
+		}
+	}
+});
+
+test('only the fading effects blur, and their blur is spent before the track ends', () => {
+	// Two invariants in one place because they are the same rule seen from both
+	// ends. A slide arrives at full clarity from off screen and must never blur.
+	// Whatever does blur has to be FLAT by the end, or spring overshoot past p=1
+	// extrapolates it and the panel softens again as it settles — the same flicker
+	// the reveal frame already exists to keep opacity out of.
+	const profile = profileFor('center', { viewportHeight: 800 });
+	const blurAt = (frames, p) => Number(frames.getFrame(p).filter.match(/blur\(([\d.]+)px\)/)[1]);
+
+	const slide = new FrameEngine(buildOpenKeyframes({ ...profile, effect: 'slide' }, 373, 373, 373));
+	assert.equal(blurAt(slide, 0), 0, 'slide must not blur at its hidden frame');
+	assert.equal(blurAt(slide, 1), 0, 'slide must not blur at rest');
+
+	for (const effect of ['fade-scale', 'slide-fade']) {
+		const frames = new FrameEngine(buildOpenKeyframes({ ...profile, effect }, 373, 373, 373));
+		assert.equal(blurAt(frames, 0), EFFECT_BLUR[effect], `${effect} starts at its peak blur`);
+		assert.equal(blurAt(frames, 0.8), 0, `${effect} is clear by the reveal frame`);
+		assert.equal(blurAt(frames, 1), 0, `${effect} is clear at rest`);
+		// Past rest is where the flatness earns its keep: an overshooting spring
+		// extrapolates whatever slope the last segment had.
+		assert.equal(blurAt(frames, 1.25), 0, `${effect} stays clear through overshoot`);
+	}
+});
+
+test('a fading exit walks its blur back in as it leaves', () => {
+	// The entrance frames read backwards, so the panel is sharp while it is still
+	// legible and softens only as it goes. Pinned at exact values because "it
+	// blurred more than zero" is satisfied by a track that blurs at the wrong end.
+	const profile = profileFor('center', { effect: 'fade-scale', viewportHeight: 800 });
+	const frames = new FrameEngine(buildExitKeyframes(profile, 373, 373, 373, {}));
+	const blurAt = (p) => Number(frames.getFrame(p).filter.match(/blur\(([\d.]+)px\)/)[1]);
+
+	assert.equal(blurAt(1), 0, 'clear at the release pose');
+	assert.equal(blurAt(0.8), 0, 'still clear through the flat band');
+	assert.equal(blurAt(0.4), 4, 'softening on the way out');
+	assert.equal(blurAt(0), EFFECT_BLUR['fade-scale'], 'at its peak when hidden');
 });
 
 // The split that makes `center` possible: which axis a profile travels on is a
@@ -711,6 +829,40 @@ test('a centred dialog returns to rest rather than snapping', async (t) => {
 	engine.destroy();
 });
 
+test('a centred live drag continues below zero until the panel clears the viewport', async (t) => {
+	const frames = captureFrames(t);
+	const engine = new SheetEngine();
+	const dialog = makeDialog();
+	engine.setProfile(profileFor('center', { mode: 'card', viewportHeight: 800 }));
+	engine.setSnaps([373], 0);
+	const show = engine.show({ to: dialog });
+	drainFrames(frames);
+	await show;
+
+	engine.dragBy(373);
+	assert.deepEqual(
+		{
+			progress: engine.progress,
+			translate: translateY(dialog),
+			backdrop: engine.backdropProgress,
+		},
+		{ progress: 0, translate: 373, backdrop: 0.3640238704177323 },
+		'logical zero is still inset from the edge, so neither track may stop there'
+	);
+
+	engine.dragBy(600);
+	assert.deepEqual(
+		{
+			progress: engine.progress,
+			translate: translateY(dialog),
+			backdrop: engine.backdropProgress,
+		},
+		{ progress: -0.6085790884718498, translate: 600, backdrop: 0 },
+		'the landed track extrapolates 1:1 until the box has crossed the edge'
+	);
+	engine.destroy();
+});
+
 test('a parked engine writes nothing and refuses every gesture', async (t) => {
 	const frames = captureFrames(t);
 	const engine = makeEngine();
@@ -809,6 +961,63 @@ test('a spanless settle yields no velocity rather than a non-finite one', () => 
 	assert.equal(velocityToSpring(-1, 0.5), 0);
 	assert.equal(velocityToSpring(Number.NaN, -120), 0);
 	assert.equal(velocityToSpring(-1, Number.NaN), 0);
+});
+
+test('short snap hops cap flick energy without changing a normal hop', async (t) => {
+	const settle = async (span, flick) => {
+		const frames = captureFrames(t);
+		const engine = new SheetEngine();
+		const dialog = makeDialog();
+		engine.setProfile(profileFor('bottom'));
+		engine.setSnaps([480, 720], 1);
+		const opened = engine.show({ to: dialog });
+		drainFrames(frames);
+		await opened;
+		engine.dragBy(240 - span);
+
+		const sizes = [];
+		engine.on('change', ({ phase }) => {
+			if (phase === 'snapping') {
+				sizes.push(Number.parseFloat(dialog.style.height) - translateY(dialog));
+			}
+		});
+		const settled = engine.settleTo(0, -flick);
+		const frameCount = drainFrames(frames);
+		await settled;
+
+		let reversals = 0;
+		let direction = 0;
+		for (let index = 1; index < sizes.length; index++) {
+			const next = Math.sign(sizes[index] - sizes[index - 1]);
+			if (next && direction && next !== direction) reversals++;
+			if (next) direction = next;
+		}
+		const result = {
+			span,
+			flick,
+			overshoot: Number((480 - Math.min(...sizes)).toFixed(4)),
+			reversals,
+			frameCount,
+		};
+		engine.destroy();
+		return result;
+	};
+
+	const measured = [];
+	for (const [span, flick] of [
+		[240, 1.5],
+		[5, 0.5],
+		[1.5, 1.5],
+		[1, 3],
+	]) {
+		measured.push(await settle(span, flick));
+	}
+	assert.deepEqual(measured, [
+		{ span: 240, flick: 1.5, overshoot: 7.215, reversals: 1, frameCount: 33 },
+		{ span: 5, flick: 0.5, overshoot: 0.2778, reversals: 1, frameCount: 32 },
+		{ span: 1.5, flick: 1.5, overshoot: 0.0833, reversals: 1, frameCount: 32 },
+		{ span: 1, flick: 3, overshoot: 0.0556, reversals: 1, frameCount: 32 },
+	]);
 });
 
 test('snap overshoot frames never bend the settled track', () => {
@@ -1125,28 +1334,26 @@ test('every exit clears the screen by exactly one cushion, from rest and mid-dra
 });
 
 test('a non-translating exit stays in place from rest and follows the finger mid-drag', () => {
-	// fade-scale and pop scale down IN PLACE. The `away > 0` guard on the cushion
-	// floor is what keeps that true: without it every one of these exits from rest
-	// would pick up a cushion of stray downward drift.
-	for (const effect of ['fade-scale', 'pop']) {
-		const profile = profileFor('bottom', { effect });
-		assert.equal(
-			translateYOf(buildExitKeyframes(profile, 500, 500)[0]),
-			0,
-			`${effect} exit from rest does not travel`
-		);
+	// fade-scale scales down IN PLACE. The `away > 0` guard on the cushion floor
+	// is what keeps that true: without it the exit from rest would pick up a
+	// cushion of stray downward drift.
+	const profile = profileFor('bottom', { effect: 'fade-scale' });
+	assert.equal(
+		translateYOf(buildExitKeyframes(profile, 500, 500)[0]),
+		0,
+		'fade-scale exit from rest does not travel'
+	);
 
-		// Continuing a drag it must not double back toward rest either — it carries
-		// on past the release pose by one cushion while it shrinks and fades. This
-		// is what a desktop swipe-down looks like under desktop-exit-effect.
-		const dragged = buildExitKeyframes(profile, 100, 500, 200);
-		assert.equal(
-			translateYOf(dragged[0]),
-			awayTranslation(profile, 100, 500, 200) + EXIT_CUSHION,
-			`${effect} exit continuing a drag carries on outward`
-		);
-		assert.equal(dragged[0].opacity, '0', `${effect} still fades out`);
-	}
+	// Continuing a drag it must not double back toward rest either — it carries
+	// on past the release pose by one cushion while it shrinks and fades. This
+	// is what a desktop swipe-down looks like under desktop-exit-effect.
+	const dragged = buildExitKeyframes(profile, 100, 500, 200);
+	assert.equal(
+		translateYOf(dragged[0]),
+		awayTranslation(profile, 100, 500, 200) + EXIT_CUSHION,
+		'fade-scale exit continuing a drag carries on outward'
+	);
+	assert.equal(dragged[0].opacity, '0', 'fade-scale still fades out');
 });
 
 test('an exit from an overpulled negative size still points away from rest', () => {
@@ -1268,10 +1475,9 @@ test('a profile with no edgeInset field is treated as edge-mounted', () => {
 
 test('fading effects reach full opacity before the geometry settles', () => {
 	const keyframes = buildOpenKeyframes(profileFor('bottom', { effect: 'fade-scale' }), 500, 500);
-	const reveal = Object.keys(keyframes)
-		.map(Number)
-		.find((percent) => percent > 0 && percent < 100);
-	assert.ok(reveal, 'a mid-timeline opacity keyframe exists');
+	const percents = Object.keys(keyframes).map(Number);
+	assert.deepEqual(percents, [0, 80, 100], 'the default reveal lands at exactly 80% of travel');
+	const reveal = percents[1];
 	assert.equal(keyframes[reveal].opacity, '1');
 	assert.equal(keyframes[0].opacity, '0');
 
@@ -1284,7 +1490,6 @@ test('the opacity reveal frame stays collinear with the geometry', () => {
 	// using zeroed defaults. A partial reveal frame would therefore bend the
 	// transform track and blow up under spring overshoot, so the frame must
 	// carry the exact linear midpoint of the outer frames.
-	// pop deliberately bends its scale track, so it is covered separately.
 	const parse = (transform) => transform.match(/-?\d+(\.\d+)?/g).map(Number);
 	for (const position of ['bottom', 'left', 'right']) {
 		for (const effect of ['fade-scale', 'slide-fade']) {
@@ -1305,72 +1510,6 @@ test('the opacity reveal frame stays collinear with the geometry', () => {
 			assert.equal(keyframes[percents[1]].opacity, '1');
 		}
 	}
-});
-
-test('pop enters with exactly one scale overshoot and a fast fade', () => {
-	const keyframes = buildOpenKeyframes(profileFor('bottom', { effect: 'pop' }), 500, 500);
-	const percents = Object.keys(keyframes)
-		.map(Number)
-		.sort((a, b) => a - b);
-	const scaleAt = (p) => Number(keyframes[p].transform.match(/scale\(([\d.]+)\)/)[1]);
-	const opacityAt = (p) => Number(keyframes[p].opacity);
-
-	assert.deepEqual(percents, [0, REVEAL_PERCENT.pop, POP_OVERSHOOT_PERCENT, 100]);
-
-	// Opacity: 0 -> 1 across the first 30%, then flat. Flat to the end keeps it
-	// out of the overshoot extrapolation entirely.
-	assert.equal(opacityAt(0), 0);
-	assert.equal(opacityAt(REVEAL_PERCENT.pop), 1);
-	assert.equal(opacityAt(POP_OVERSHOOT_PERCENT), 1);
-	assert.equal(opacityAt(100), 1);
-	assert.ok(REVEAL_PERCENT.pop <= 30, 'the card is opaque long before it arrives');
-
-	// Scale: rises monotonically past rest exactly once, then settles back.
-	const scales = percents.map(scaleAt);
-	assert.equal(scales[0], 0.85);
-	assert.equal(scaleAt(POP_OVERSHOOT_PERCENT), POP_OVERSHOOT_SCALE);
-	assert.ok(POP_OVERSHOOT_SCALE >= 1.04 && POP_OVERSHOOT_SCALE <= 1.06);
-	assert.equal(scales.at(-1), 1);
-
-	let peaks = 0;
-	for (let index = 1; index < scales.length - 1; index++) {
-		if (scales[index] > scales[index - 1] && scales[index] > scales[index + 1]) peaks++;
-	}
-	assert.equal(peaks, 1, 'exactly one bounce, no second wobble');
-});
-
-test('pop exits cleanly with no bounce', () => {
-	// Through buildExitKeyframes, which is what every dismissal now builds. Asking
-	// buildOpenKeyframes for an exit would test a path production never takes.
-	const keyframes = buildExitKeyframes(profileFor('bottom', { effect: 'pop' }), 500, 500);
-	const percents = Object.keys(keyframes)
-		.map(Number)
-		.sort((a, b) => a - b);
-	const scales = percents.map((p) => Number(keyframes[p].transform.match(/scale\(([\d.]+)\)/)[1]));
-
-	assert.ok(!percents.includes(POP_OVERSHOOT_PERCENT), 'the exit drops the bounce frame');
-	assert.ok(
-		scales.every((value) => value <= 1),
-		'an exit never scales past rest'
-	);
-	assert.ok(
-		scales.every((value, index) => index === 0 || value >= scales[index - 1]),
-		'the exit scale track is monotonic, so reversing it never bounces'
-	);
-	// Walked in reverse (p: 1 -> 0) this ends at the exit scale with opacity 0.
-	assert.equal(scales[0], 0.9);
-	assert.equal(Number(keyframes[0].opacity), 0);
-	assert.equal(Number(keyframes[REVEAL_PERCENT.pop].opacity), 1);
-});
-
-test('pop borrows no bounce from its spring', () => {
-	const run = simulateSpring(SPRING_PRESETS.pop);
-	assert.ok(run.early, 'pop trips the early-settle detector');
-	assert.ok(run.ms >= 480 && run.ms <= 620, `pop settles in ${run.ms}ms (want ~500-600)`);
-	assert.ok(
-		run.maxProgress <= 1.005,
-		`pop's spring stays calm (${run.maxProgress.toFixed(4)}); the keyframes bounce`
-	);
 });
 
 test('cards scale from the edge they rest against', () => {
@@ -1611,6 +1750,15 @@ test('paintedProgress states the paint rule once for both writers', () => {
 		assert.equal(paintedProgress(position, 0), 0, `${position} keeps the hidden frame`);
 		assert.equal(paintedProgress(position, 0.5), 0.5, `${position} passes mid-travel through`);
 	}
+	assert.equal(paintedProgress('center', -0.4, 'showing'), 0, 'a flight still protects scale');
+	assert.equal(paintedProgress('center', -0.4, 'hiding'), 0, 'both flight directions floor');
+	for (const phase of ['dragging', 'snapping', 'returning', 'shown']) {
+		assert.equal(
+			paintedProgress('center', -0.4, phase),
+			-0.4,
+			`${phase} keeps the linear landed track live below zero`
+		);
+	}
 });
 
 test('the engine paints exactly what paintedProgress allows', async (t) => {
@@ -1667,6 +1815,92 @@ test('a side sheet is denied the paint the helper denies it', async (t) => {
 		assert.ok(x >= -0.001, `and the panel never leaves its edge (${x})`);
 	}
 	engine.destroy();
+});
+
+test('a side return paints a distinct pose on every spring frame after a hard flick', async (t) => {
+	const frames = captureFrames(t);
+	const engine = new SheetEngine();
+	const dialog = makeDialog();
+	engine.setProfile(profileFor('right'));
+	engine.setSnaps([400], 0);
+	const show = engine.show({ to: dialog });
+	drainFrames(frames);
+	await show;
+
+	engine.dragBy(20);
+	const poses = [];
+	const progress = [];
+	engine.on('change', ({ phase, progress: value }) => {
+		if (phase === 'returning') {
+			poses.push(dialog.style.transform);
+			progress.push(value);
+		}
+	});
+	const returning = engine.returnToRest(3);
+	const frameCount = drainFrames(frames);
+	await returning;
+
+	assert.deepEqual(
+		{
+			frameCount,
+			paintedFrames: poses.length,
+			distinctPoses: new Set(poses).size,
+			maxProgress: Number(Math.max(...progress).toFixed(6)),
+			first: poses[0],
+			last: poses.at(-1),
+		},
+		{
+			frameCount: 11,
+			paintedFrames: 9,
+			distinctPoses: 9,
+			maxProgress: 0.998623,
+			first: 'translate3d(14.7716px, 0px, 0px) scale(1)',
+			last: 'translate3d(0.5507px, 0px, 0px) scale(1)',
+		}
+	);
+	engine.destroy();
+});
+
+test('a side return spends a harder flick rather than swallowing it', async (t) => {
+	// The companion to the test above, and the half it cannot see. Capping the
+	// seed is what stops the paint clamp from eating frames, but cap it too hard
+	// and the run stops answering the gesture at all: at the bare attraction
+	// impulse every release from v=1 upward settled in an identical 200ms, which
+	// is the "every settle looks the same however hard it was thrown" failure the
+	// snap preset's tuning notes already warn about, reintroduced one function
+	// over. Distinctness alone is satisfied by a run that ignores velocity
+	// entirely, so the spread has to be asserted separately.
+	const measure = async (velocityPxMs) => {
+		const frames = captureFrames(t);
+		const engine = new SheetEngine();
+		engine.setProfile(profileFor('right'));
+		engine.setSnaps([400], 0);
+		const show = engine.show({ to: makeDialog() });
+		drainFrames(frames);
+		await show;
+
+		engine.dragBy(120);
+		let painted = 0;
+		engine.on('change', ({ phase }) => {
+			if (phase === 'returning') painted++;
+		});
+		const returning = engine.returnToRest(velocityPxMs);
+		drainFrames(frames);
+		await returning;
+		engine.destroy();
+		return painted;
+	};
+
+	const [still, gentle, hard] = [await measure(0), await measure(1), await measure(3)];
+	assert.deepEqual(
+		{ still, gentle, hard },
+		{ still: 18, gentle: 16, hard: 14 },
+		'a 120px pull spends its release velocity across a measurable range of run lengths'
+	);
+	// Stated as an ordering too, so a retune that keeps three distinct numbers but
+	// inverts them — a harder flick taking LONGER because its overshoot is being
+	// clamped away — fails here rather than reading as a pass.
+	assert.ok(still > gentle && gentle > hard, 'and a harder flick is always the shorter run');
 });
 
 test('a harder flick reaches its snap sooner', async (t) => {
@@ -1922,7 +2156,7 @@ test('an oscillating entrance never walks the backdrop backwards', async (t) => 
 	// bounce; the scrim is a fade, not a tracker.
 	const frames = captureFrames(t);
 	const engine = new SheetEngine();
-	engine.setProfile(profileFor('bottom', { effect: 'pop', viewportWidth: 420 }));
+	engine.setProfile(profileFor('bottom', { effect: 'fade-scale', viewportWidth: 420 }));
 	engine.setSnaps([414], 0);
 	engine.setSpring({ attraction: 0.2, friction: 0.15 });
 
@@ -1960,7 +2194,7 @@ test('an oscillating reversal never walks the exit backdrop forwards', async (t)
 	// entrance must keep fading rather than pulsing back up on the swing.
 	const frames = captureFrames(t);
 	const engine = new SheetEngine();
-	engine.setProfile(profileFor('bottom', { effect: 'pop', viewportWidth: 420 }));
+	engine.setProfile(profileFor('bottom', { effect: 'fade-scale', viewportWidth: 420 }));
 	engine.setSnaps([414], 0);
 	engine.setSpring({ attraction: 0.2, friction: 0.15 });
 
@@ -2028,7 +2262,7 @@ test('a side dismissal continues its drag pose without a backdrop jump', async (
 			flight.every((value, index) => index === 0 || value <= flight[index - 1] + 1e-9),
 			`${position} overlay never brightens on the way out`
 		);
-		assert.ok(flight[0] <= released + 1e-9, `${position} first flight frame does not pop darker`);
+		assert.ok(flight[0] <= released + 1e-9, `${position} first flight frame does not jump darker`);
 		assert.equal(engine.backdropProgress, 0, `${position} overlay is clear once hidden`);
 		engine.destroy();
 	}
@@ -2209,7 +2443,7 @@ test('touch drags dismiss in the direction the finger travels', () => {
 test('every preset is damped enough that nothing wobbles', () => {
 	// No phase oscillates. `snap` is the one that breathes past its target, and
 	// it does so once, by a few percent — the room a flick needs to read as a
-	// throw. pop's visible bounce still lives in its keyframes, not its spring.
+	// throw.
 	for (const preset of Object.values(SPRING_PRESETS)) {
 		assert.ok(preset.attraction > 0 && preset.attraction < 1);
 		assert.ok(preset.friction > 0 && preset.friction < 1);
@@ -2260,7 +2494,6 @@ function simulateSpring({ attraction, friction }) {
 test('spring presets land in their timing budgets', () => {
 	const budgets = {
 		entrance: { ms: [450, 550], t90: [250, 320], overshoot: [0, 0.005] },
-		pop: { ms: [480, 620], t90: [250, 340], overshoot: [0, 0.005] },
 		exit: { ms: [250, 360], t90: [100, 200], overshoot: [0, 0.005] },
 		// The snap spring is the only one allowed to breathe. A flick needs
 		// somewhere to go, and 0.15/0.455 absorbed it within a frame at any

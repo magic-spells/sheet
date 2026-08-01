@@ -64,6 +64,8 @@ SheetEngine declares `animatesDialog: true`, marking it a **direct** engine: it 
 
 Because the engine declares itself, the panel selects the engine transport with or without a trigger; `SheetPanel.show(trigger)` passes the trigger straight through, purely for focus return. The old `panel.show(trigger || this)` hack is gone — do not reintroduce it.
 
+**`stop()` is the only place terminal state is reset by hand, and it has to be.** It is dialog-panel's force-close repair path — a `<form method="dialog">` submit, or an app-level `dialog.close()` — so it can land mid-flight, it emits no `beforeHide`, and it **never paints a frame**. Anything only `#applyFrame` would have cleared is therefore stranded unless `stop()` clears it explicitly, and two flags qualify. A stale `#morphing` leaves `#applyFrame` inert forever: the next `show()` paints no `p = 0` frame at all and `showModal()` promotes a dialog sitting at CSS rest — the full-size flash this entire transport design exists to prevent. A stale `#flightPhase` of `'showing'` makes `#flightEnvelope` mistake the *next* entrance for the same flight and hold the old opacity through its `Math.max`, so a reopened sheet pops straight to the scrim it was stopped under.
+
 In `#settle()`'s hidden branch, inline styles are restored **before** `hidden` is emitted (matching `stop()`): the emit runs dialog-panel's finalize synchronously, and a `hidden` listener may re-enter `show()` — restoring afterwards would wipe that new run's freshly painted `p = 0` frame, now a visible full-size flash since the dialog is in the top layer from frame 0.
 
 Assigning `morphEngine` adds `[morph]` to dialog-panel, whose CSS forces the dialog's transform and transition to neutral values. SheetEngine writes motion inline, which wins. The more subtle rule is display:
@@ -82,12 +84,33 @@ Never put `display:flex` on the closed base dialog. A closed dialog must retain 
 
 - Spring travel is always `TRAVEL = 100`.
 - Visual choreography uses `p = position / TRAVEL`; never PhysicsEngine's per-run `progress`.
-- Show/hide reversals interpolate on a two-frame track from the painted pose to rest without carrying velocity.
+- Show/hide reversals interpolate on a two-frame track between the pose already painted and the *other run's* endpoint: a `show()` landing mid-exit runs to the entrance track's rest frame carrying no velocity, a `hide()` landing mid-entrance runs to the **exit** track's hidden frame carrying the queued dismissal velocity — see below.
 - Early settle requires both `|position - target| < 0.3` and `|position - lastPosition| < 0.15` for two consecutive frames.
-- Extrapolation below the hidden frame is always clamped at `p = 0` (a fast dismissal otherwise drives scale negative). Above `p = 1` the clamp is **profile-specific**: a bottom sheet's overshoot is the intended settling breath, but every other profile is refused it — see below.
+- Extrapolation below the hidden frame is clamped at `p = 0` for the **flight** phases (`showing`, `hiding`) only; the landed phases continue below it — see below. Above `p = 1` the clamp is **profile-specific**: a bottom sheet's overshoot is the intended settling breath, but every other profile is refused it — see below.
 - Size-like values in `CLAMP_POSITIVE` are floored at `0px`.
 - `p = 1` is rebased to the active snap after every settle.
 - Snap transitions interpolate current and destination resting geometry, then emit `{ from, to }`.
+
+#### The fade finishes late because the spring front-loads
+
+A fading effect reaches full opacity at `DEFAULT_REVEAL_PERCENT` on the geometry timeline and is
+flat from there to `100%`. That flatness is the point:
+it keeps spring overshoot past `p = 1` from flickering a settled panel back toward transparent, and
+keeps opacity out of the overshoot extrapolation entirely. Walking the frames backwards puts the
+fade-out in the closing tail, which is where an exit wants it.
+
+**The number is a percent of `TRAVEL`, not of time, and that is the whole trap.** Springs
+front-load, so under the `entrance` preset `p = 0.55` arrives **133ms into a 483ms run**. The old
+default of `55` therefore finished the fade at 28% of the wall clock and left 350ms in which the
+only remaining motion was a `0.95 → 1` scale — about **9px on a 420px dialog**. Opacity is the
+channel the eye actually tracks on a fade effect, and its rate went from steep to exactly zero in a
+single keyframe, so the entrance read as arriving and then stopping dead well short of rest. The
+default is `80`, which keeps the flatness the frame exists for — the entrance preset peaks at
+`p = 0.9996`, and even a loose `spring=` override overshooting to 1.25 stays flat — while giving the
+fade the back half of the run it was visually missing.
+
+Nothing pinned the value before; a test now asserts the built keyframe percents are exactly
+`[0, 80, 100]`, so a change to it is a change someone had to mean.
 
 #### Velocity has no default denominator
 
@@ -97,9 +120,10 @@ therefore takes the span explicitly, and every call site states its own:
 
 | run | span |
 | --- | --- |
-| `show` / `hide` (mid-entrance reversal) | resting size — the run covers off-screen → flush |
-| `returnToRest` (side or center) | resting size — same |
-| `settleTo` (snap) | **signed segment `targetSize - startSize`** |
+| `show` (mid-exit reversal) | resting size — the run covers off-screen → flush, and carries no velocity anyway |
+| `hide` (mid-entrance reversal) | **`exitTravel()`** — it rebuilds onto the real exit track, so it normalises over the real exit's runway |
+| `returnToRest` (side or center) | resting size — capped, see below |
+| `settleTo` (snap) | **signed segment `targetSize - startSize`** — capped, see below |
 | `dismiss` | **`exitTravel()`** — the runway this run has left |
 
 A snap's keyframes are rebuilt per run to span exactly that hop, and on every *downward* snap the
@@ -128,6 +152,38 @@ added 50–150ms of *invisible* tail — the spring undershooting past the hidde
 `paintedProgress` clamps, so the panel is gone while `hidden` and focus return still wait. Recorded
 so the retune is not rediscovered as an obvious win.
 
+#### No seed may outrun the spring that receives it
+
+Normalising over the span is what makes a release velocity mean something; it is also what makes a
+*short* run explosive, because the seed scales as `1/span`. Two runs cap it, and both take the cap
+from the same quantity: `terminalSeed(preset, distance)` — the velocity that spring could have built
+for itself under a constant attraction over `distance`, held until friction balanced it, which in
+the seed's pre-damping units is `distance × attraction / friction`.
+
+- **`settleTo`** caps at `SNAP_VELOCITY_LIMIT = terminalSeed(SPRING_PRESETS.snap, TRAVEL)`. A snap
+  hop can be about **1px** — the last of a slow drag onto its own snap — and an ordinary flick
+  through it launched the sheet **85px past its destination** and wobbled there for the better part
+  of a second. Capping rather than declaring short hops velocity-free is deliberate: a normal
+  240px / 1.5 px·ms⁻¹ flick is unchanged (7.2px of overshoot, 33 frames), while the 1px hop thrown
+  at 3 px·ms⁻¹ now overshoots 0.06px in 32.
+- **`returnToRest`** caps at `terminalSeed(SPRING_PRESETS.rest, TRAVEL - start)` — the distance
+  *this* run has left, because it starts wherever the finger left the panel. Anything past that
+  becomes overshoot past `TRAVEL`, and a snapless profile's paint clamp is obliged to eat it: a
+  20px pull flicked at 3 px·ms⁻¹ painted **one** pose and then sat motionless for 317ms while the
+  spring finished running.
+
+**The return cap was first written as the bare attraction impulse**, dropping the `/ friction` term
+— 0.455× too small — and it swallowed every flick whole: `v = 1` and `v = 3` both returned in an
+identical **200ms**. That is exactly the "every settle looks the same however hard it was thrown"
+failure the `snap` preset's own tuning notes exist to prevent, reintroduced one function over. Stating
+the derivation once, in `terminalSeed`, is why it cannot be got wrong in one place and right in the
+other. At the honest terminal velocity a 120px pull spreads **300 / 267 / 233ms across
+`v = 0 / 1 / 3`** and still paints every frame; the deepest pull with the hardest flick peaks at
+`p = 1.001` for a single frame, below the 1.0001 the preset overshoots by unaided. The suite asserts
+the spread *and* its ordering, so a retune that keeps three distinct numbers but inverts them — a
+harder flick taking longer because its overshoot is being clamped away — fails rather than reads as
+a pass.
+
 #### Nothing but a bottom sheet is painted past flush
 
 `#applyFrame` clamps `p` at 1 for any non-bottom profile. Their tracks end at rest with no frame
@@ -149,6 +205,27 @@ extrapolation that lifts the panel slightly off its edge instead of stretching a
 past its content — and the edge profile's `--sheet-bleed` skirt covers what the lift exposes, while
 a card is already floating over backdrop. It is a genuine improvement on the old behaviour, where
 an upward rubber-band grew the panel taller and opened empty surface inside it.
+
+#### The floor belongs to a flight, not to a landed track
+
+The lower end of `paintedProgress` is **phase-aware**, and it has to be, because the two kinds of
+track have different shapes below zero. `showing` and `hiding` paint an effect's keyframes: their
+`0%` frame carries a scale, an opacity, a translate off-screen, and extrapolating past it is
+meaningless — a fast run drives scale *negative*. Those phases floor at 0, which is what the `exit`
+preset's invisible-tail note above depends on. The landed phases — `dragging`, `snapping`,
+`returning`, `shown` — paint drag/rest tracks that are linear in size with scale pinned at 1, so
+below zero is not extrapolation into nonsense but the 1:1 continuation the finger is asking for.
+
+Flooring them was the bug, and it is a profile-specific one that a bottom sheet cannot see. A bottom
+sheet's logical size `0` *is* off-screen: the panel is translated by exactly its own height. Anything
+that rests inset from the edge is not. A **200px centred confirm on an 800px viewport** floats 300px
+down; at logical size 0 it has translated 200px and sits at `500…700` — fully on screen — and the
+floor refused every further frame. It could not be dragged off screen **at all**; it froze, fully
+visible, under the finger. The upper cap is unchanged and still position-keyed: a non-bottom profile
+is refused paint past flush in every phase.
+
+`--sheet-progress` publishes through the same function with the same phase, so a landed track's
+token goes negative exactly when its transform does.
 
 #### A slide's runway is the panel's own reach
 
@@ -222,8 +299,8 @@ const floor = away > 0 ? away + exitCushion(profile) : 0;
 ```
 
 The `away > 0` guard is load-bearing, not defensive. From rest there is no displacement and so no
-floor — without the guard every `fade-scale` and `pop` exit would acquire a cushion of stray drift,
-and those effects scale down *in place*. It also subsumes the negative-size floor above: on a hard
+floor — without the guard every `fade-scale` exit would acquire a cushion of stray drift instead of
+scaling down *in place*. It also subsumes the negative-size floor above: on a hard
 overpull `away` exceeds the slide runway on its own, so the floor is what keeps the runway pointing
 away from rest.
 
@@ -236,8 +313,42 @@ absolute and a drag cannot move it, while a bottom sheet above its floor has gen
 correctly clears the smaller height it now paints. Below its floor the height is pinned there and the
 runway stops shrinking however deep the drag went.
 
-The effects are `slide`, `fade-scale`, `slide-fade`, and `pop`. An exit walks the same effect
+The effects are `slide`, `fade-scale`, and `slide-fade`. An exit walks the same effect
 vocabulary but is asked separately — see the exit effects below.
+
+#### A cancelled entrance leaves by the exit door
+
+A `hide()` that lands mid-entrance is a third caller of the exit track, and it used to be the one
+that did not use it: it simply reversed the spring back down the **entrance** keyframes. Same
+symptom family as the drag-continuing branch above — one run quietly parameterised by the wrong
+geometry — and it is the *common* case for a fast double-tap, a route change, or an Escape landing
+inside the opening run. Three things were wrong at once:
+
+| what the reversed entrance did | what it should do |
+| --- | --- |
+| ignored `exit-effect` / `desktop-exit-effect` entirely | leave by the configured exit effect |
+| followed `slide`'s entrance track to its hidden frame, with no edge-clear remap | drop the scrim as the box crosses the edge |
+| walked an entrance-only bounce keyframe **backwards** | use the monotonic exit track |
+
+So `hide()` builds the real exit frames for the live size, then rebases: `0%` is that exit's hidden
+pose and `100%` is the exact frame already painted, so the first frame of the reversal is
+byte-identical to the last frame of the entrance and the run starts at `p = 1`. It is the mirror of
+the hide-to-show reversal, which rebases the entrance's rest frame onto the painted exit pose. A
+reversal caught at the entrance's *untouched* `p = 0` frame is the one shortcut: both effects are
+already invisible there, so it switches hidden poses at `p = 0` and completes asynchronously rather
+than scheduling a spring across zero travel.
+
+The clear progress is derived from `frameAwayTranslation()` — the away-signed translate read back
+out of the frame that was actually painted — not from raw spring progress. Recomputing it would
+lose the active effect's geometry and put the scrim's edge crossing on a different frame than the
+panel's. Its overlay counterpart is `backdropCeilingExtent`, the exact mirror of the show-reversal's
+`backdropFloorExtent`: a floor stops a cancelled *exit* from restarting the entrance's opacity ramp
+from nothing, a ceiling stops a cancelled *entrance* from restarting the exit's ramp from full. Both
+are stated as extents so `dismissalZoneProgress()` inverts them exactly.
+
+The suite pins all of it as exact poses: a `fade-scale` entrance with `exit-effect="slide"` lands on
+`translate3d(0px, 528px, 0px) scale(1)` — a 500px snap plus the 28px cushion, i.e. slide geometry,
+not the entrance's — with the backdrop already at 0 on every off-screen frame.
 
 #### Arriving and leaving are separate questions
 
@@ -305,7 +416,6 @@ state to resync.
 | Preset | attraction | friction | settle | t90 | max `p` |
 | --- | --- | --- | --- | --- | --- |
 | `entrance` | 0.055 | 0.32 | ~483ms | ~267ms | 1.000 |
-| `pop` | 0.055 | 0.325 | ~516ms | ~283ms | 1.000 |
 | `exit` | 0.30 | 0.56 | ~267ms | ~133ms | 1.000 |
 | `snap` | 0.065 | 0.3 | ~566ms | ~200ms | **1.024** |
 | `rest` | 0.15 | 0.455 | ~333ms | ~167ms | 1.000 |
@@ -321,25 +431,46 @@ tuning. Splitting the preset was necessary but *not
 sufficient* on its own: it made the gap velocity-gated rather than gone (a 20px pull flicked back
 at 4 px/ms still measured a 50px gap), which is why the paint clamp above exists.
 
-No phase oscillates; `pop` is the only visible bounce and it lives in its keyframes, not its
-spring. The numbers are asserted in `test/sheet-engine.test.js` via a simulation of the integrator
-plus the early-settle detector, which matches measured browser runs to within a frame. Overshoot
-budgets are asserted **per preset**, so `snap`'s breath cannot be used as cover for another phase
-drifting loose.
+No preset is tuned to wobble; `snap` alone carries a small settling breath. The numbers are asserted
+in `test/sheet-engine.test.js` via a simulation of the integrator plus the early-settle detector,
+which matches measured browser runs to within a frame. Overshoot budgets are asserted **per
+preset**, so `snap`'s breath cannot be used as cover for another phase drifting loose.
 
 #### Public override
 
 `spring="attraction friction"` (attribute) or `sheet.spring = { attraction, friction }` (property) overrides the tuning per instance. Parsing lives in `parseSpring()` in `sheet-engine.js` rather than the component, so it stays node-testable; the component's static `SheetPanel.parseSpring` delegates to it. Both dials must be exclusive of 0 and 1 (PhysicsEngine throws otherwise); invalid input is ignored and the presets stand.
 
-The override governs how the sheet **arrives** — the entrance, including pop's. Exits and snaps keep their presets.
+The override governs how the sheet **arrives**. Exits and snaps keep their presets.
 
 Scaling those phases proportionally was tried and abandoned: the exit preset's attraction is ~5.5× the entrance's, so any brisk override pushed it past the dial ceiling and the clamped result was badly overdamped — `spring="0.3 0.55"` measured a **2933ms exit**. The dials are bounded, so no proportional rule survives a fast entrance. A test pins exit frame counts as identical across a wide range of overrides.
 
 ### Backdrop opacity
 
-The overlay tracks the **dismissal zone**, never raw progress. One rule: any position at or above rest saturates at exactly 1, and only travel below rest maps `[rest → off-screen]` onto `[1 → 0]`. Rest is the lowest snap, which collapses snapped and snapless sheets into one formula — for a snapless sheet the lowest snap *is* its resting size, so it fades across its whole downward travel with no special case.
+The overlay tracks the **dismissal zone**, never raw progress. One rule: any position at or above rest saturates at exactly 1, and only travel below rest maps `[rest → off-screen]` onto `[1 → 0]`.
 
 Saturation is what stops upward rubber-band overscroll, spring overshoot, and entrance overshoot from lightening the overlay. During the opening/closing flight the panel is full-size but only partly on screen, so flight progress scales the visible extent; that also makes a snapped sheet reach full opacity by the time it passes its lowest snap, so opening to a mid snap never rests under a half-faded overlay.
+
+#### Off-screen is further away than rest is tall
+
+"Rest" is the lowest snap **plus the gap the panel already floats by**: `#backdropRestExtent()` is
+`snaps[0] + slideInset(profile, restSize)`, and the live numerator gains the same inset —
+`#currentSize + inset`. The denominator is the distance from the resting pose to genuinely outside
+the viewport, and for anything that does not sit welded to its edge that is strictly more than its
+own extent.
+
+The lowest snap alone was the bug, and centre showed it worst. A **373px dialog on an 800px
+viewport** floats 213px from the top edge, so its real dismissal zone is 586px; dividing by 373
+drove the scrim to **0 with 213px of the dialog still on screen** — a fully lit panel over a
+completely clear backdrop, for the whole last third of the gesture. A card-mode edge profile had the
+same defect scaled down to its `--sheet-card-margin`.
+
+**Adding the inset to both ends is what keeps this from disturbing a snapped bottom sheet.** At the
+lowest snap the numerator is `snaps[0] + inset` and the denominator is the same expression, so
+saturation still lands at exactly 1 at exactly the lowest snap, whatever the inset — and for an
+edge-mode bottom sheet `slideInset` is `0`, so the formula is arithmetically identical to what it
+was. Snap-to-snap travel above the lowest snap still leaves the overlay untouched. What changed is
+only where the *zero* is, and only for a profile that never rested against the edge in the first
+place.
 
 #### Saturation only holds one end; a flight is monotonic at both
 
@@ -361,12 +492,21 @@ down from where the entrance got to. That also means no explicit reset is needed
 that begin a flight — every entry crosses a phase boundary, since `show()` refuses a second
 `showing` run and `dismiss()` always arrives from `shown` or `dragging`.
 
-`#currentSize × p` is the visible extent for entrances and non-sliding exits. A slide is the one
-exception because its hidden frame carries an extra shadow cushion beyond the point where its box
-clears the viewport. `exitClearProgress()` derives that edge-crossing point from the same
+`(#currentSize + inset) × p` is the visible extent for entrances and non-sliding exits. A slide is
+the one exception because its hidden frame carries an extra shadow cushion beyond the point where
+its box clears the viewport. `exitClearProgress()` derives that edge-crossing point from the same
 `exitValues()` geometry as the keyframes. During a slide exit, `[p = 1 → edge crossing]` maps from
 the exact release opacity to `0`; the remaining cushion clears the shadow with no overlay hanging
 over the empty screen.
+
+A reversal's endpoint is seeded from the **opacity actually painted**, inverted back through
+`#backdropRestExtent()`, rather than recomputed as `p × size`. Those two disagree precisely because
+of the remap above: a slide exit's scrim is already ahead of raw progress, so recomputing it jumped
+the overlay back **up** on the first frame of a rescued exit. The jump is bounded by
+`cushion / (extent + inset + cushion)` — invisible at the 28px default, but **0.18 on a narrow side
+panel under the 72px cushion a soft shadow needs**. Multiplying the painted opacity by the rest
+extent inverts `dismissalZoneProgress()` exactly, so `#flightEnvelope` starts from the number the
+scrim is wearing. The same inversion supplies the cancelled entrance's `backdropCeilingExtent`.
 
 There used to be a `flightSize: restSize` override on the settle action here, and its disappearance
 is the tell that the exit *track* was the bug rather than the overlay. The old drag-continuing branch
@@ -383,15 +523,17 @@ so the overlay can never disagree with the panel or lag it by a frame. It surfac
 `--sheet-backdrop-progress`, always in `[0, 1]`.
 
 `--sheet-progress` reports what was **painted**, not a clamped copy of it. The rule lives once, in the
-pure `paintedProgress(position, p)` exported from `sheet-engine.js` — floor at 0 always, and cap at 1
-only for a non-bottom profile, whose track is refused any paint past flush. `#applyFrame()` paints
-through it and the component's `#setProgress()` publishes through it, so the two cannot drift: a
-bottom sheet's ~1.024 snap breath flows through uncapped, and a side sheet never publishes a
-position its panel was denied. An unresolved profile has no rule to apply and falls back to the full
-`[0, 1]` clamp at the component. Anything keyed off the token sees the same number the transform did.
-A hide-to-show reversal restarts its two-frame track at `p = 0`, so its settle action carries the
-painted progress and visible-extent floors forward; both public tokens continue from the reversal
-pose rather than restarting their entrance ramps.
+pure `paintedProgress(position, p, phase)` exported from `sheet-engine.js` — a floor at 0 for the
+flight phases only, and a cap at 1 only for a non-bottom profile, whose track is refused any paint
+past flush. `#applyFrame()` paints through it and the component's `#setProgress()` publishes through
+it — the engine hands the phase out on every `change` event so both writers apply the same rule to
+the same frame. They therefore cannot drift: a bottom sheet's ~1.024 snap breath flows through
+uncapped, a landed drag's negative continuation is published as painted, and a side sheet never
+publishes a position its panel was denied. An unresolved profile has no rule to apply and falls back
+to the full `[0, 1]` clamp at the component. Anything keyed off the token sees the same number the
+transform did. A hide-to-show reversal restarts its two-frame track at `p = 0`, so its settle action
+carries the painted progress and visible-extent floors forward; both public tokens continue from the
+reversal pose rather than restarting their entrance ramps.
 
 Two traps here, both fixed: reusing `--sheet-progress` for the overlay made snap-to-snap drags lighten it (mid-drag `p = currentSize / activeSize`, so 720px→480px emitted 0.667), and letting spring overshoot into the snap-size interpolation pushed the logical size a hair past the destination snap, which read as a dip under 1 on a settle that never left the snap range. The size interpolation is clamped to its segment; the visual breath belongs to the keyframes.
 
@@ -505,6 +647,28 @@ Sensing is separate from policy.
 - X and Y use independent rolling `100ms` velocity trackers.
 - Direction comes from the dominant axis of total displacement.
 - Cancellation reports zero velocity.
+- An **uncaptured** pointer that leaves the element ends the gesture as a cancellation.
+
+#### A mouse that wanders off never comes back
+
+`pointerleave` is the fourth way a gesture can end, and it exists for a hole that is **mouse-only**:
+a direct pointer — touch, or a pen in contact — gets implicit pointer capture to its own
+`pointerdown` target, so it keeps targeting that element wherever it travels and always delivers its
+own `pointerup`. Only a mouse can be pressed on a surface, drifted across the boundary inside the
+`5px` slop, and released on the far side, where no `pointerup` this listener can see ever fires.
+
+The stray paint is not the damage. Chrome and Firefox give the mouse a **stable `pointerId`**, so
+the stranded-active gesture still matches on the next plain **hover**: it resumes calling `onMove`,
+crosses slop, and captures a *button-less* pointer — after which the panel follows the bare cursor
+around the screen until some unrelated click finally delivers a `pointerup`.
+
+It is guarded on `#captured` because once capture is set the element becomes the effective target of
+every event for that pointer and boundary events only re-fire when the capture target itself
+changes — so a captured drag cannot fire `pointerleave` and abort itself mid-flight, and the leave
+that arrives after the implicit release at `pointerup` lands with the gesture already inactive and
+early-returns. It ends as a **cancellation**, not a clean release: the user did not let go here, and
+zero velocity plus `cancelled: true` is what routes the consumer to a settle-back. A pointer that
+wandered off must never be able to dismiss.
 
 #### Continuous tracking (do not break this)
 
@@ -589,15 +753,25 @@ desktop profile is dismiss-only and carries exactly one resting size: the sides 
 CSS width, and a center *or* a desktop bottom takes its intrinsic content height. Any left, right,
 or center profile ignores the snap list on a mobile viewport too.
 
-Each desktop attribute falls back to its mobile twin, **except `desktop-position` when `position`
-is `bottom`, which falls out to `center`.** Both desktop shapes are content-sized, so this
-fallback is about placement rather than size: a floating card in the middle of the screen reads as
-a desktop dialog, while an edge-anchored panel reads as a sheet. Every other position rests
-against an edge on any viewport and inherits itself unchanged. `desktop-position="bottom"` opts
-back in — and still sizes to content there, not to 85vh. The knock-on is deliberate:
-`desktopEffect` already answers `fade-scale` for a desktop `center`, so a plain bottom sheet
-arrives on the desktop by fading rather than flying a viewport height up into the middle of the
-screen.
+Each desktop attribute falls back to its mobile twin, with **two** exceptions.
+
+**`desktop-position` falls out to `center` when `position` is `bottom`.** Both desktop shapes are
+content-sized, so this fallback is about placement rather than size: a floating card in the middle
+of the screen reads as a desktop dialog, while an edge-anchored panel reads as a sheet. Every other
+position rests against an edge on any viewport and inherits itself unchanged.
+`desktop-position="bottom"` opts back in — and still sizes to content there, not to 85vh. The
+knock-on is deliberate: `desktopEffect` already answers `fade-scale` for a desktop `center`, so a
+plain bottom sheet arrives on the desktop by fading rather than flying a viewport height up into the
+middle of the screen.
+
+**`desktopMode` inherits nothing — it hard-defaults to `card`, for every position.** Not a fallback
+with an exception in it, like the one above: the getter never reads `mode` at all. On a wide
+viewport the sheet is chrome floating over a page rather than the surface itself, so it floats by
+`--sheet-card-margin` unless `desktop-mode="edge"` welds it back to the edge. This is why the exit
+track section above can say flatly that *every* desktop swipe-close left a `--sheet-card-margin`
+sliver — a consumer who never wrote `desktop-mode` still got a card. Do not describe the desktop attributes
+as uniformly inheriting: `mode` and `desktop-mode` are independent settings that happen to share a
+vocabulary.
 
 ### A ceiling above which the sheet simply does not open
 
@@ -618,6 +792,14 @@ snap where the gesture started. Resolving from it was the previous bug: dragging
 about 88vh and flicking up targeted 55vh, while flicking down from the same point could dismiss.
 A flick steps exactly one snap in its direction measured from the live position; a slow release
 chooses the nearest snap with the closed edge as a candidate.
+
+**Nothing re-measures under a live finger.** A `snap-points` or `initial-snap` attribute change
+refuses `#prepareOpen()` while a drag is active, exactly as the throttled resize path does and for
+the same reason: `setSnaps` rewrites `#currentSize` to the active snap and would discard the
+gesture's pose. Because `#dragMove` measures displacement continuously from `pointerdown`, a moving
+finger repaints the correct pose on its very next move and only a finger held perfectly still stays
+jumped — and the release settle or the next open re-measures either way, so there is nothing to gain
+by doing it under the finger.
 
 CSS lengths are resolved at open and resize with a hidden fixed-position browser probe — snap heights, a side profile's `--sheet-active-size`, a card profile's `--sheet-card-margin` edge inset, the `--sheet-exit-cushion`, a desktop card's `--sheet-desktop-panel-width`, and a content-sized profile's intrinsic box (centre, or bottom past the breakpoint) are all resolved this way, once per profile rebuild rather than per frame. The pure `resolveSnapPoints()` helper handles deterministic unit conversion for tests.
 
@@ -646,13 +828,25 @@ case, and only in Chromium.) The order matters and is the whole trick:
 `beginMorph` lands the panel at rest in the *current* profile first: a resize arriving mid-drag
 would otherwise bake a half-finished transform into the measured `from` box.
 
+**Landing means `#landPendingSettle()` first, then the stop** — the same order `setSnaps` and
+`setProfile` use, and the order matters because `settleTo` never leaves `'shown'`, so a snap settle
+still in flight passes `beginMorph`'s state guard. Stopping the spring without landing it leaves
+`#activeSnap` naming the snap the settle *started* from, which is what `#restSize()` reads: the
+panel jerked backward to the old snap and the host's FLIP then measured that wrong box as its `from`.
+`#landPendingSettle` early-returns unless the spring is still animating, so it has to run before the
+stop, not after.
+
 Three things that look optional and are not:
 
 - **The timeout beside `transitionend`.** That event does not fire for an interrupted transition
   or for a property whose start equals its end. Without the timeout a panel can be stranded in
   morph geometry.
-- **Backdrop pinned to 1** while morphing. The resting size changes underneath the dismissal-zone
-  calculation, which would otherwise blink the overlay mid-morph.
+- **Backdrop pinned to 1** while morphing, and *published*, not merely held. The resting size
+  changes underneath the dismissal-zone calculation, which would otherwise blink the overlay
+  mid-morph — but `#applyFrame` is inert from `beginMorph` to `endMorph`, so the pin has to be
+  emitted there or nothing ever tells the component about it. Without the emit, a drag into the
+  dismissal zone that crossed the breakpoint held the CSS scrim at its faded value for the whole
+  morph, with the panel fully on screen, and then popped to 1 when `#finishMorph` wrote `(1, 1)`.
 - **`from` is read, never remembered.** Mid-transition `getBoundingClientRect` reports the animated
   value, which is exactly what makes a re-entrant morph (a window edge dragged back and forth)
   retarget seamlessly.

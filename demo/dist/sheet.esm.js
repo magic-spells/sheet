@@ -91,7 +91,10 @@ var DragGesture = class {
 			pointerdown: _.#handlePointerDown.bind(_),
 			pointermove: _.#handlePointerMove.bind(_),
 			pointerup: (event) => _.#handlePointerEnd(event, false),
-			pointercancel: (event) => _.#handlePointerEnd(event, true)
+			pointercancel: (event) => _.#handlePointerEnd(event, true),
+			pointerleave: (event) => {
+				if (!_.#captured) _.#handlePointerEnd(event, true);
+			}
 		};
 		for (const [type, handler] of Object.entries(_.#handlers)) el.addEventListener(type, handler);
 	}
@@ -258,8 +261,27 @@ var MANAGED_PROPERTIES = [
 	"transformOrigin",
 	"willChange",
 	"width",
-	"height"
+	"height",
+	"filter"
 ];
+/**
+* Peak blur, in pixels, an effect's hidden frame carries.
+*
+* Only the fading effects take one — a `slide` arrives at full clarity from off
+* screen, and blurring it would read as motion blur it never earned. The values
+* differ because the two effects have different amounts of other motion to hide
+* behind: `fade-scale` changes almost nothing geometrically (a 5% scale), so it
+* needs the blur to carry the arrival, while `slide-fade` already translates and
+* a matching blur would read as a smear.
+*
+* Blur resolves to 0 on the same reveal frame opacity does, which is what keeps
+* it out of the overshoot extrapolation — see DEFAULT_REVEAL_PERCENT. Zero
+* disables it.
+*/
+var EFFECT_BLUR = {
+	"fade-scale": 8,
+	"slide-fade": 4
+};
 /**
 * Spring tuning per motion phase.
 *
@@ -274,7 +296,6 @@ var MANAGED_PROPERTIES = [
 *
 *              settle   t90    max progress
 *   entrance    483ms   267ms   1.000
-*   pop         516ms   283ms   1.000  — bounce lives in its keyframes
 *   exit        267ms   133ms   1.000  — leaving is brisker than arriving
 *   snap        566ms   200ms   1.024  — the only phase allowed to breathe
 *   rest        333ms   167ms   1.000
@@ -296,10 +317,6 @@ var SPRING_PRESETS = {
 		attraction: .055,
 		friction: .32
 	},
-	pop: {
-		attraction: .055,
-		friction: .325
-	},
 	exit: {
 		attraction: .3,
 		friction: .56
@@ -313,6 +330,27 @@ var SPRING_PRESETS = {
 		friction: .455
 	}
 };
+/**
+* The fastest seed a release may hand a spring: the velocity that spring could
+* build for itself under a constant attraction over `distance`, held until
+* friction balanced it. In the seed's pre-damping units that terminal velocity
+* is the attraction impulse divided by the friction removing it.
+*
+* Stated once because both cappers below need exactly this quantity and got it
+* from the same argument. Writing it out twice already went wrong once — the
+* return cap was authored as the bare attraction impulse, dropping the `/
+* friction` term, which made it 0.455x too small: it swallowed every flick whole
+* so a gentle throw and a hard one returned in the same 200ms, which is the
+* "every settle looks identical however hard it was thrown" failure the snap
+* preset's own tuning notes exist to prevent.
+* @param {{attraction: number, friction: number}} preset - Spring tuning.
+* @param {number} distance - Spring-space distance the run has left to cover.
+* @returns {number} Largest seed that stays within the spring's own means.
+*/
+function terminalSeed(preset, distance) {
+	return distance * preset.attraction / preset.friction;
+}
+var SNAP_VELOCITY_LIMIT = terminalSeed(SPRING_PRESETS.snap, 100);
 /** Bounds PhysicsEngine accepts for both dials, exclusive. */
 var MIN_SPRING = .001;
 var MAX_SPRING = .999;
@@ -386,15 +424,26 @@ function exitCushion(profile) {
 	return Number.isFinite(value) && value >= 0 ? value : 28;
 }
 /**
-* Percent of the geometry timeline at which a fading effect reaches full
-* opacity, per effect. Finishing the fade early keeps spring overshoot past
-* p=1 from flickering a settled panel back toward transparent, and — because
-* opacity is flat from the reveal frame to the end — keeps opacity out of the
-* overshoot extrapolation entirely. Walking these frames backwards puts the
-* fade-out in the closing tail, which is where an exit wants it.
+* Percent of the geometry timeline at which fading effects reach full opacity.
+* Finishing the fade before the end keeps spring overshoot
+* past p=1 from flickering a settled panel back toward transparent, and —
+* because opacity is flat from the reveal frame to the end — keeps opacity out
+* of the overshoot extrapolation entirely. Walking these frames backwards puts
+* the fade-out in the closing tail, which is where an exit wants it.
+*
+* The number is a percent of TRAVEL, not of time, and springs front-load: at
+* the entrance preset, p=0.55 arrives 133ms into a 483ms run. So the old 55
+* finished the fade at 28% of the wall clock and left 350ms in which the only
+* remaining motion was a 0.95 -> 1 scale — about 9px on a 420px dialog. Opacity
+* is the channel the eye actually tracks on a fade effect, and its rate went
+* from steep to exactly zero in a single keyframe, so the entrance read as
+* arriving and then stopping dead well short of rest.
+*
+* 80 keeps the whole point of the frame — the entrance preset peaks at p=0.9996
+* and even a loose `spring=` override stays flat through an overshoot to 1.25 —
+* while giving the fade the back half of the run it was visually missing.
 */
-var REVEAL_PERCENT = { pop: 30 };
-var DEFAULT_REVEAL_PERCENT = 55;
+var DEFAULT_REVEAL_PERCENT = 80;
 /**
 * Converts a gesture velocity into spring units.
 *
@@ -423,9 +472,6 @@ function velocityToSpring(velocityPxMs, spanPx) {
 	if (Math.abs(spanPx) < 1) return 0;
 	return velocityPxMs * FRAME_MS * VELOCITY_BOOST * 100 / spanPx;
 }
-var POP_OVERSHOOT_SCALE = 1.05;
-var POP_ENTER_SCALE = .85;
-var POP_EXIT_SCALE = .9;
 function clamp(value, min, max) {
 	return Math.min(max, Math.max(min, value));
 }
@@ -455,11 +501,16 @@ function dismissalZoneProgress(visibleExtent, restExtent) {
 * panel by `#applyFrame`, published as `--sheet-progress` by the component. Both
 * writers go through here so they can never disagree about a frame.
 *
-* Springs undershoot past the target on a fast dismissal, so the lower end
-* always floors: extrapolating below the hidden frame is meaningless and flips
-* scale negative. The upper end is profile-specific. A bottom sheet's overshoot
-* is the intended settling breath — a height stretch, or a translate below the
-* floor, both of which the snap track carries explicit frames for — so it flows
+* Springs undershoot past the target on a fast entrance or dismissal, so the
+* lower end floors during those FLIGHT phases: extrapolating an effect's hidden
+* frame is meaningless and can drive scale negative. Landed tracks are a
+* different shape. Drag, snap, and return frames are linear in size with scale
+* pinned at 1, so allowing their progress below 0 is the 1:1 continuation a
+* finger needs to carry an inset or centred panel all the way off screen.
+*
+* The upper end remains profile-specific. A bottom sheet's overshoot is the
+* intended settling breath — a height stretch, or a translate below the floor,
+* both of which the snap track carries explicit frames for — so it flows
 * through. A side sheet has no equivalent: it is fixed width and sits against
 * its edge, so every position past flush translates it inward and opens a
 * sliver of backdrop down the side. There is nothing to tune away there — a
@@ -467,10 +518,12 @@ function dismissalZoneProgress(visibleExtent, restExtent) {
 * — so the only fix is to refuse it.
 * @param {'bottom'|'left'|'right'|'center'} position - Sheet edge.
 * @param {number} p - Raw frame progress.
+* @param {string} [phase] - Motion phase; landed phases may extrapolate below 0.
 * @returns {number} Progress that may be painted and published.
 */
-function paintedProgress(position, p) {
-	return Math.max(0, position === "bottom" ? p : Math.min(1, p));
+function paintedProgress(position, p, phase) {
+	const lower = phase === "dragging" || phase === "snapping" || phase === "returning" || phase === "shown" ? p : Math.max(0, p);
+	return position === "bottom" ? lower : Math.min(1, lower);
 }
 /**
 * Axis a position is dismissed along.
@@ -571,6 +624,21 @@ function awayVector(position, distance) {
 	};
 }
 /**
+* Reads the away-signed translation from one of this engine's own style frames.
+* Cancelled entrances rebase from the exact FrameEngine pose already painted;
+* recomputing it from raw spring progress would lose the active effect's
+* geometry and put the backdrop's edge crossing on a different frame than the
+* panel's.
+* @param {'bottom'|'left'|'right'|'center'} position - Sheet edge.
+* @param {Object} styles - A style frame built by {@link styleFromValues}.
+* @returns {number} Translate magnitude toward the dismiss edge, in pixels.
+*/
+function frameAwayTranslation(position, styles) {
+	const match = styles?.transform?.match(/translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px,\s*-?[\d.]+px\)/);
+	if (!match) return 0;
+	return awayOffset(position, Number(match[1]), Number(match[2]));
+}
+/**
 * The extent the panel actually paints along the dismiss axis at a live size.
 *
 * Only a snapped bottom sheet's changes with the gesture, and only above its
@@ -637,7 +705,8 @@ function transformOrigin(profile) {
 function restStyles(profile, size, restSize, lowestSize = 0) {
 	const base = {
 		opacity: "1",
-		transformOrigin: transformOrigin(profile)
+		transformOrigin: transformOrigin(profile),
+		filter: "blur(0px)"
 	};
 	if (resizesWithSnaps(profile)) {
 		const paintedSize = Math.max(size, lowestSize);
@@ -658,17 +727,6 @@ function restStyles(profile, size, restSize, lowestSize = 0) {
 		transform: `translate3d(${(profile.position === "left" ? -1 : 1) * shift}px, 0px, 0px) scale(1)`
 	};
 }
-/**
-* Numeric motion values for the hidden or shown end of an open/close run.
-* @param {Object} profile - Resolved visual profile.
-* @param {number} [profile.edgeInset=0] - Pixels the panel rests from its screen
-*   edge; a slide clears it on top of the panel's own size.
-* @param {Object} options - Frame options.
-* @param {number} options.size - Live size in pixels along the dismiss axis.
-* @param {boolean} options.hidden - True for the off-screen end of the run.
-* @param {boolean} [options.exiting] - True when building a closing run.
-* @returns {{x: number, y: number, scale: number, opacity: number}} Motion values.
-*/
 /**
 * The gap a slide has to clear before the panel's own extent even starts.
 *
@@ -692,7 +750,19 @@ function slideInset(profile, size) {
 	if (profile.position === "center") return Math.max(0, ((profile.viewportHeight || 0) - size) / 2);
 	return profile.edgeInset ?? 0;
 }
-function effectValues(profile, { size, hidden, exiting = false, floorDistance = 0 }) {
+/**
+* Numeric motion values for the hidden or shown end of an open/close run.
+* @param {Object} profile - Resolved visual profile.
+* @param {number} [profile.edgeInset=0] - Pixels the panel rests from its screen
+*   edge; a slide clears it on top of the panel's own size.
+* @param {Object} options - Frame options.
+* @param {number} options.size - Live size in pixels along the dismiss axis.
+* @param {boolean} options.hidden - True for the off-screen end of the run.
+* @param {number} [options.floorDistance] - Minimum away-distance the hidden end
+*   must reach. Only buildExitKeyframes supplies it; see the floor rule there.
+* @returns {{x: number, y: number, scale: number, opacity: number}} Motion values.
+*/
+function effectValues(profile, { size, hidden, floorDistance = 0 }) {
 	const { effect, position } = profile;
 	let distance = 0;
 	let scale = 1;
@@ -706,15 +776,13 @@ function effectValues(profile, { size, hidden, exiting = false, floorDistance = 
 		scale = .95;
 		opacity = 0;
 	}
-	if (hidden && effect === "pop") {
-		scale = exiting ? POP_EXIT_SCALE : POP_ENTER_SCALE;
-		opacity = 0;
-	}
 	if (hidden) distance = Math.max(distance, floorDistance);
+	const blur = hidden ? EFFECT_BLUR[effect] ?? 0 : 0;
 	return {
 		...awayVector(position, distance),
 		scale,
-		opacity
+		opacity,
+		blur
 	};
 }
 /**
@@ -727,13 +795,14 @@ function styleFromValues(profile, values) {
 	return {
 		opacity: String(values.opacity),
 		transform: `translate3d(${values.x}px, ${values.y}px, 0px) scale(${values.scale})`,
-		transformOrigin: transformOrigin(profile)
+		transformOrigin: transformOrigin(profile),
+		filter: `blur(${values.blur ?? 0}px)`
 	};
 }
 /**
-* Assembles a track from two sets of motion values, plus whatever intermediate
-* frames the effect asks for. Shared by the entrance and the exit so the two
-* cannot drift apart on the details below.
+* Assembles a track from two sets of motion values, plus the reveal frame a
+* fading track needs. Shared by the entrance and the exit so the two cannot
+* drift apart on the details below.
 *
 * Fading effects get a third keyframe where opacity has already reached its
 * shown value while the geometry is only partway. FrameEngine back-fills
@@ -745,13 +814,9 @@ function styleFromValues(profile, values) {
 *   size property, if the profile has one, and the shared transform-origin.
 * @param {Object} from - Motion values for the 0% frame.
 * @param {Object} to - Motion values for the 100% frame.
-* @param {Object} options - Assembly options.
-* @param {string} options.effect - Effect governing the intermediate frames.
-* @param {boolean} [options.exiting] - True when building a closing run, which
-*   drops pop's bounce frame so the track stays monotonic.
 * @returns {Object} Percent-keyed keyframes.
 */
-function assembleKeyframes(profile, restFrame, from, to, { effect, exiting = false }) {
+function assembleKeyframes(profile, restFrame, from, to) {
 	const frame = (values) => ({
 		...restFrame,
 		...styleFromValues(profile, values)
@@ -764,6 +829,7 @@ function assembleKeyframes(profile, restFrame, from, to, { effect, exiting = fal
 			y: lerp(from.y, to.y),
 			scale: lerp(from.scale, to.scale),
 			opacity: lerp(from.opacity, to.opacity),
+			blur: lerp(from.blur ?? 0, to.blur ?? 0),
 			...overrides
 		});
 	};
@@ -771,13 +837,14 @@ function assembleKeyframes(profile, restFrame, from, to, { effect, exiting = fal
 		0: frame(from),
 		100: frame(to)
 	};
-	if (effect === "pop" && !exiting) keyframes[70] = at(70, {
-		scale: POP_OVERSHOOT_SCALE,
-		opacity: to.opacity
-	});
-	if (from.opacity !== to.opacity) {
-		const reveal = REVEAL_PERCENT[effect] ?? DEFAULT_REVEAL_PERCENT;
-		keyframes[reveal] = at(reveal, { opacity: to.opacity });
+	const fades = from.opacity !== to.opacity;
+	const softens = (from.blur ?? 0) !== (to.blur ?? 0);
+	if (fades || softens) {
+		const reveal = DEFAULT_REVEAL_PERCENT;
+		keyframes[reveal] = at(reveal, {
+			opacity: to.opacity,
+			blur: to.blur ?? 0
+		});
 	}
 	return keyframes;
 }
@@ -802,7 +869,7 @@ function buildOpenKeyframes(profile, size, restSize, lowestSize = 0) {
 		scale: 1,
 		opacity: 1
 	};
-	return assembleKeyframes(profile, restStyles(profile, size, restSize, lowestSize), from, to, { effect: profile.effect });
+	return assembleKeyframes(profile, restStyles(profile, size, restSize, lowestSize), from, to);
 }
 /**
 * The two ends of an exit run, as motion values.
@@ -825,7 +892,6 @@ function exitValues(profile, size, restSize, lowestSize = 0, effect = profile.ef
 	}, {
 		size: paintedExtent(profile, size, restSize, lowestSize),
 		hidden: true,
-		exiting: true,
 		floorDistance: away > 0 ? away + exitCushion(profile) : 0
 	});
 	return {
@@ -863,18 +929,14 @@ function exitValues(profile, size, restSize, lowestSize = 0, effect = profile.ef
 * @returns {Object} Percent-keyed keyframes.
 */
 function buildExitKeyframes(profile, size, restSize, lowestSize = 0, { effect } = {}) {
-	const resolved = effect || profile.effect;
-	const { live, hidden } = exitValues(profile, size, restSize, lowestSize, resolved);
-	return assembleKeyframes(profile, restStyles(profile, size, restSize, lowestSize), hidden, live, {
-		effect: resolved,
-		exiting: true
-	});
+	const { live, hidden } = exitValues(profile, size, restSize, lowestSize, effect || profile.effect);
+	return assembleKeyframes(profile, restStyles(profile, size, restSize, lowestSize), hidden, live);
 }
 /**
 * Pixel distance an exit run covers, for velocity normalisation.
 *
 * A translating exit covers the runway it has left. One that does not translate —
-* `fade-scale`, `pop` — still crosses the panel's own visible extent by making it
+* `fade-scale` — still crosses the panel's own visible extent by making it
 * vanish, and that extent is also the floor for a translating exit whose runway
 * the drag has already eaten: normalising a hard flick over the cushion alone
 * would hand the spring ~100 units of seed on a 100-unit run and cross it in a
@@ -907,13 +969,15 @@ function exitTravel(profile, size, restSize, lowestSize = 0, effect = profile.ef
 * @param {number} restSize - CSS resting size in pixels.
 * @param {number} [lowestSize=0] - Lowest bottom snap in pixels.
 * @param {string} [effect] - Exit effect; defaults to the profile's.
+* @param {number} [liveAway] - Painted start translation. Supplying it rebases
+*   the edge crossing for a cancelled entrance whose start is not at rest.
 * @returns {number} Exit progress in [0, 1], or 0 for a non-sliding effect.
 */
-function exitClearProgress(profile, size, restSize, lowestSize = 0, effect = profile.effect) {
+function exitClearProgress(profile, size, restSize, lowestSize = 0, effect = profile.effect, liveAway) {
 	if (effect !== "slide") return 0;
 	const extent = paintedExtent(profile, size, restSize, lowestSize);
 	const { away, hiddenAway } = exitValues(profile, size, restSize, lowestSize, effect);
-	const travel = hiddenAway - away;
+	const travel = hiddenAway - (liveAway ?? away);
 	if (travel <= 0) return 0;
 	return clamp((hiddenAway - (extent + slideInset(profile, extent))) / travel, 0, 1);
 }
@@ -1133,6 +1197,7 @@ var SheetEngine = class extends EventEmitter {
 	beginMorph() {
 		const _ = this;
 		if (_.#state !== "shown" || _.#morphing || !_.#dialog) return false;
+		_.#landPendingSettle();
 		if (_.#spring.isAnimating) _.#spring.stop();
 		_.#currentSize = _.#restSize();
 		_.#p = 1;
@@ -1142,6 +1207,7 @@ var SheetEngine = class extends EventEmitter {
 		_.#phase = "morphing";
 		_.#settleAction = null;
 		_.#backdropProgress = 1;
+		_.#emitChange();
 		return true;
 	}
 	/**
@@ -1196,8 +1262,8 @@ var SheetEngine = class extends EventEmitter {
 		_.#saveInline();
 		_.#prepareDialog();
 		if (_.#state === "hiding") {
-			const floorP = paintedProgress(_.#profile.position, _.#p);
-			const floorExtent = _.#currentSize * floorP;
+			const floorP = paintedProgress(_.#profile.position, _.#p, _.#phase);
+			const floorExtent = _.#backdropProgress * _.#backdropRestExtent();
 			const painted = _.#frames?.getFrame(floorP);
 			_.#state = "showing";
 			_.#phase = "showing";
@@ -1238,11 +1304,26 @@ var SheetEngine = class extends EventEmitter {
 		const velocity = _.#pendingDismissVelocity;
 		_.#pendingDismissVelocity = 0;
 		if (_.#state === "showing") {
+			const paintedP = paintedProgress(_.#profile.position, _.#p, _.#phase);
+			const painted = _.#frames?.getFrame(paintedP);
+			const paintedBackdrop = _.#backdropProgress;
+			const exit = _.#makeExitFrames(_.#currentSize);
 			_.#state = "hiding";
 			_.#phase = "hiding";
-			_.#settleAction = { type: "hidden" };
+			_.#frames = painted ? new FrameEngine({
+				0: exit.getFrame(0),
+				100: painted
+			}) : exit;
+			const start = paintedP === 0 ? 0 : 100;
+			_.#p = start / 100;
+			_.#settleAction = {
+				type: "hidden",
+				backdropCeilingExtent: paintedBackdrop * _.#backdropRestExtent(),
+				backdropClearProgress: _.#exitClearProgress(_.#currentSize, frameAwayTranslation(_.#profile.position, painted))
+			};
+			_.#applyFrame(_.#p);
 			_.#tuneSpring("exit");
-			return _.#animate(_.#p * 100, 0, velocityToSpring(-Math.abs(velocity), _.#restSize()));
+			return _.#animate(start, 0, velocityToSpring(-Math.abs(velocity), _.#exitTravel(_.#currentSize)));
 		}
 		return _.dismiss(velocity);
 	}
@@ -1267,11 +1348,7 @@ var SheetEngine = class extends EventEmitter {
 		_.#p = activeSize === 0 ? 1 : _.#currentSize / activeSize;
 		_.#phase = "dragging";
 		_.#applyFrame(_.#p);
-		_.emit("change", {
-			progress: _.#p,
-			backdropProgress: _.#backdropProgress,
-			phase: _.#phase
-		});
+		_.#emitChange();
 	}
 	/**
 	* Springs from the live size to a snap point.
@@ -1298,7 +1375,8 @@ var SheetEngine = class extends EventEmitter {
 			startSize
 		};
 		_.#tuneSpring("snap");
-		return _.#animate(0, 100, velocityToSpring(velocityPxMs, targetSize - startSize));
+		const velocity = clamp(velocityToSpring(velocityPxMs, targetSize - startSize), -SNAP_VELOCITY_LIMIT, SNAP_VELOCITY_LIMIT);
+		return _.#animate(0, 100, velocity);
 	}
 	/**
 	* Returns a snapless profile from its live drag position back to rest.
@@ -1323,7 +1401,9 @@ var SheetEngine = class extends EventEmitter {
 			targetSize
 		};
 		_.#tuneSpring("rest");
-		return _.#animate(start, 100, velocityToSpring(velocityPxMs, targetSize));
+		const velocity = velocityToSpring(velocityPxMs, targetSize);
+		const velocityCeiling = terminalSeed(SPRING_PRESETS.rest, 100 - start);
+		return _.#animate(start, 100, Math.min(velocity, velocityCeiling));
 	}
 	/**
 	* Springs to the configured exit keyframe and emits `hidden`.
@@ -1357,6 +1437,8 @@ var SheetEngine = class extends EventEmitter {
 		_.#phase = "hidden";
 		_.#p = 0;
 		_.#settleAction = null;
+		_.#morphing = false;
+		_.#flightPhase = null;
 		_.#restoreInline();
 		_.emit("stop", { progress: 0 });
 	}
@@ -1498,9 +1580,20 @@ var SheetEngine = class extends EventEmitter {
 		const _ = this;
 		return exitTravel(_.#profile, size, _.#restSize(), _.#snaps[0], _.#profile.exitEffect || _.#profile.effect);
 	}
-	#exitClearProgress(size) {
+	#exitClearProgress(size, liveAway) {
 		const _ = this;
-		return exitClearProgress(_.#profile, size, _.#restSize(), _.#snaps[0], _.#profile.exitEffect || _.#profile.effect);
+		return exitClearProgress(_.#profile, size, _.#restSize(), _.#snaps[0], _.#profile.exitEffect || _.#profile.effect, liveAway);
+	}
+	/**
+	* Distance from the resting pose to fully outside the viewport, excluding
+	* the shadow cushion. Adding the inset to both the live and resting extents
+	* preserves a snapped bottom sheet's saturation at its lowest snap while a
+	* card or centred panel keeps fading until its trailing edge really clears.
+	* @returns {number} Dismissal-zone extent at the lowest resting snap.
+	*/
+	#backdropRestExtent() {
+		const _ = this;
+		return _.#snaps[0] + slideInset(_.#profile, _.#restSize());
 	}
 	#makeRestFrames(fromSize, toSize) {
 		const _ = this;
@@ -1534,8 +1627,8 @@ var SheetEngine = class extends EventEmitter {
 	/**
 	* Resolves the tuning for a phase, honouring any instance override.
 	*
-	* The override governs how the sheet ARRIVES — the entrance, including
-	* pop's. Exits and snaps keep their presets.
+	* The override governs how the sheet ARRIVES. Exits and snaps keep their
+	* presets.
 	*
 	* Scaling those phases proportionally was tried and abandoned: the exit
 	* preset's attraction is ~5.5x the entrance's, so any brisk override pushed
@@ -1543,7 +1636,7 @@ var SheetEngine = class extends EventEmitter {
 	* spring — `spring="0.3 0.55"` measured a 2933ms exit. The dials are bounded,
 	* so no proportional rule can survive a fast entrance. Pinning exits to
 	* their presets keeps leaving brisk for every override instead.
-	* @param {'entrance'|'exit'|'snap'|'pop'} kind - Motion phase.
+	* @param {'entrance'|'exit'|'snap'|'rest'} kind - Motion phase.
 	* @returns {{attraction: number, friction: number}} Spring tuning.
 	*/
 	#springFor(kind) {
@@ -1551,7 +1644,7 @@ var SheetEngine = class extends EventEmitter {
 		const preset = SPRING_PRESETS[kind] || SPRING_PRESETS.entrance;
 		const override = _.#springOverride;
 		if (!override) return preset;
-		if (kind !== "entrance" && kind !== "pop") return preset;
+		if (kind !== "entrance") return preset;
 		return {
 			attraction: clamp(override.attraction, MIN_SPRING, MAX_SPRING),
 			friction: clamp(override.friction, MIN_SPRING, MAX_SPRING)
@@ -1559,11 +1652,11 @@ var SheetEngine = class extends EventEmitter {
 	}
 	/**
 	* Retunes the spring for the next run.
-	* @param {'entrance'|'exit'|'snap'} kind - Motion phase.
+	* @param {'entrance'|'exit'|'snap'|'rest'} kind - Motion phase.
 	*/
 	#tuneSpring(kind) {
 		const _ = this;
-		const preset = _.#springFor(kind === "entrance" && _.#profile.effect === "pop" ? "pop" : kind);
+		const preset = _.#springFor(kind);
 		_.#spring.setAttraction(preset.attraction);
 		_.#spring.setFriction(preset.friction);
 	}
@@ -1590,15 +1683,20 @@ var SheetEngine = class extends EventEmitter {
 		const _ = this;
 		const flying = _.#phase === "showing" || _.#phase === "hiding";
 		const flight = flying ? clamp(p, 0, 1) : 1;
+		const inset = slideInset(_.#profile, _.#restSize());
+		const restExtent = _.#backdropRestExtent();
+		const liveExtent = _.#currentSize + inset;
+		const ceiling = _.#settleAction?.backdropCeilingExtent;
+		const flightExtent = ceiling === void 0 ? liveExtent : ceiling;
 		const clear = _.#settleAction?.backdropClearProgress;
 		if (clear > 0 && clear < 1) {
 			const visibleFlight = clamp((flight - clear) / (1 - clear), 0, 1);
-			_.#backdropProgress = _.#flightEnvelope(flying, dismissalZoneProgress(_.#currentSize * visibleFlight, _.#snaps[0]));
+			_.#backdropProgress = _.#flightEnvelope(flying, dismissalZoneProgress(flightExtent * visibleFlight, restExtent));
 			return;
 		}
 		const floor = _.#settleAction?.backdropFloorExtent;
-		const extent = floor === void 0 ? _.#currentSize * flight : floor + (_.#currentSize - floor) * flight;
-		_.#backdropProgress = _.#flightEnvelope(flying, dismissalZoneProgress(extent, _.#snaps[0]));
+		const extent = floor === void 0 ? flightExtent * flight : floor + (liveExtent - floor) * flight;
+		_.#backdropProgress = _.#flightEnvelope(flying, dismissalZoneProgress(extent, restExtent));
 	}
 	/**
 	* Holds a flight's overlay monotonic: an entrance may only darken it, an exit
@@ -1650,7 +1748,7 @@ var SheetEngine = class extends EventEmitter {
 		if (_.#morphing) return;
 		_.#syncBackdropProgress(p);
 		if (!_.#frames || !_.#dialog) return;
-		const styles = _.#frames.getFrame(paintedProgress(_.#profile.position, p));
+		const styles = _.#frames.getFrame(paintedProgress(_.#profile.position, p, _.#phase));
 		for (const property of CLAMP_POSITIVE) if (property in styles && parseFloat(styles[property]) < 0) styles[property] = "0px";
 		Object.assign(_.#dialog.style, styles);
 	}
@@ -1664,7 +1762,11 @@ var SheetEngine = class extends EventEmitter {
 		const _ = this;
 		if (!_.#dialog) return;
 		_.#dialog.style.display = _.#display;
-		_.#dialog.style.willChange = resizesWithSnaps(_.#profile) ? "transform, opacity, height" : "transform, opacity";
+		const hints = ["transform", "opacity"];
+		if (resizesWithSnaps(_.#profile)) hints.push("height");
+		const blurs = (effect) => (EFFECT_BLUR[effect] ?? 0) > 0;
+		if (blurs(_.#profile.effect) || blurs(_.#profile.exitEffect || _.#profile.effect)) hints.push("filter");
+		_.#dialog.style.willChange = hints.join(", ");
 	}
 	#restoreInline() {
 		const _ = this;
@@ -1877,17 +1979,20 @@ var MODES = /* @__PURE__ */ new Set(["edge", "card"]);
 var EFFECTS = /* @__PURE__ */ new Set([
 	"slide",
 	"fade-scale",
-	"slide-fade",
-	"pop"
+	"slide-fade"
 ]);
 var PROFILE_ATTRIBUTES = /* @__PURE__ */ new Set([
 	"position",
 	"mode",
 	"breakpoint",
 	"desktop-position",
-	"desktop-mode",
+	"desktop-mode"
+]);
+var EFFECT_ATTRIBUTES = /* @__PURE__ */ new Set([
+	"effect",
 	"desktop-effect",
-	"effect"
+	"exit-effect",
+	"desktop-exit-effect"
 ]);
 var RESIZE_THROTTLE_MS = 100;
 var FLICK_VELOCITY = .5;
@@ -1999,7 +2104,6 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#dialogRef = null;
 	#gestures = [];
 	#scrollVeto = null;
-	#backdropBound = false;
 	#connected = false;
 	#profile = null;
 	#snaps = [];
@@ -2040,7 +2144,6 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#handlers = {
 			beforeShow: () => {
 				if (_.#engine?.state !== "hiding") _.#setProgress(0);
-				_.#bindBackdrop();
 				_.#prepareOpen();
 			},
 			beforeHide: () => {
@@ -2069,7 +2172,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 				if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.stopPropagation();
 			},
 			resize: throttle(() => _.#handleResize(), RESIZE_THROTTLE_MS),
-			change: ({ progress, backdropProgress }) => _.#setProgress(progress, backdropProgress),
+			change: ({ progress, backdropProgress, phase }) => _.#setProgress(progress, backdropProgress, phase),
 			snapchange: (detail) => {
 				_.#syncActiveSize(detail.to);
 				_.dispatchEvent(new CustomEvent("snapchange", {
@@ -2091,7 +2194,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#syncSpring();
 			return;
 		}
-		if (name === "exit-effect" || name === "desktop-exit-effect") {
+		if (EFFECT_ATTRIBUTES.has(name)) {
 			if (_.panel?.isOpen) _.#applyProfile(_.#resolveProfile());
 			return;
 		}
@@ -2099,7 +2202,9 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#morphToProfile();
 			return;
 		}
-		if (name === "snap-points" || name === "initial-snap") _.#prepareOpen();
+		if (name === "snap-points" || name === "initial-snap") {
+			if (!_.#drag.active) _.#prepareOpen();
+		}
 	}
 	connectedCallback() {
 		const _ = this;
@@ -2171,7 +2276,6 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#panelRef = null;
 		_.#dialogRef = null;
 		_.#profile = null;
-		_.#backdropBound = false;
 		_.#drag = { active: false };
 		_.removeAttribute("engine");
 	}
@@ -2205,8 +2309,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		if (!_.#engine || !_.#snaps.length) return;
 		const requestedIndex = Number(index);
 		if (!Number.isFinite(requestedIndex)) return Promise.resolve(false);
-		const target = Math.min(_.#snaps.length - 1, Math.max(0, Math.trunc(requestedIndex)));
-		return _.#engine.settleTo(target, 0);
+		return _.#engine.settleTo(requestedIndex, 0);
 	}
 	/** @returns {number} Active snap index. */
 	get activeSnap() {
@@ -2310,23 +2413,23 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	set desktopMode(value) {
 		reflectString(this, "desktop-mode", value);
 	}
-	/** @returns {'slide'|'fade-scale'|'slide-fade'|'pop'} Mobile motion effect. */
+	/** @returns {'slide'|'fade-scale'|'slide-fade'} Mobile motion effect. */
 	get effect() {
 		const value = this.getAttribute("effect");
 		return EFFECTS.has(value) ? value : "slide";
 	}
-	/** @param {'slide'|'fade-scale'|'slide-fade'|'pop'} value - Mobile motion effect. */
+	/** @param {'slide'|'fade-scale'|'slide-fade'} value - Mobile motion effect. */
 	set effect(value) {
 		reflectString(this, "effect", value);
 	}
-	/** @returns {'slide'|'fade-scale'|'slide-fade'|'pop'} Desktop motion effect. */
+	/** @returns {'slide'|'fade-scale'|'slide-fade'} Desktop motion effect. */
 	get desktopEffect() {
 		const value = this.getAttribute("desktop-effect");
 		if (EFFECTS.has(value)) return value;
 		if (this.desktopPosition === "center") return "fade-scale";
 		return this.effect;
 	}
-	/** @param {'slide'|'fade-scale'|'slide-fade'|'pop'} value - Desktop motion effect. */
+	/** @param {'slide'|'fade-scale'|'slide-fade'} value - Desktop motion effect. */
 	set desktopEffect(value) {
 		reflectString(this, "desktop-effect", value);
 	}
@@ -2339,13 +2442,13 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	* than something welded to an edge — and a dismissal that continues a live drag
 	* carries on outward past the release pose while it does, rather than sliding
 	* the whole way off a screen it is only occupying part of.
-	* @returns {'slide'|'fade-scale'|'slide-fade'|'pop'} Mobile exit effect.
+	* @returns {'slide'|'fade-scale'|'slide-fade'} Mobile exit effect.
 	*/
 	get exitEffect() {
 		const value = this.getAttribute("exit-effect");
 		return EFFECTS.has(value) ? value : this.effect;
 	}
-	/** @param {'slide'|'fade-scale'|'slide-fade'|'pop'} value - Mobile exit effect. */
+	/** @param {'slide'|'fade-scale'|'slide-fade'} value - Mobile exit effect. */
 	set exitEffect(value) {
 		reflectString(this, "exit-effect", value);
 	}
@@ -2353,7 +2456,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	* Desktop exit effect. Falls back to `exit-effect` when that is set explicitly,
 	* and otherwise to the desktop entrance — so a profile that only names its
 	* desktop entrance still leaves the way it arrived.
-	* @returns {'slide'|'fade-scale'|'slide-fade'|'pop'} Desktop exit effect.
+	* @returns {'slide'|'fade-scale'|'slide-fade'} Desktop exit effect.
 	*/
 	get desktopExitEffect() {
 		const value = this.getAttribute("desktop-exit-effect");
@@ -2362,7 +2465,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		if (EFFECTS.has(mobile)) return mobile;
 		return this.desktopEffect;
 	}
-	/** @param {'slide'|'fade-scale'|'slide-fade'|'pop'} value - Desktop exit effect. */
+	/** @param {'slide'|'fade-scale'|'slide-fade'} value - Desktop exit effect. */
 	set desktopExitEffect(value) {
 		reflectString(this, "desktop-exit-effect", value);
 	}
@@ -2378,8 +2481,8 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	* Overrides spring tuning. Both dials are exclusive of 0 and 1; anything
 	* else is ignored and the presets stand. Setting null restores them.
 	*
-	* The pair replaces the entrance tuning — how the sheet arrives, including
-	* pop's — but exits and snaps keep their own presets.
+	* The pair replaces the entrance tuning — how the sheet arrives — but exits
+	* and snaps keep their own presets.
 	* @param {{attraction: number, friction: number}|string|null} value - Tuning.
 	*/
 	set spring(value) {
@@ -2430,18 +2533,12 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		if (!element) return;
 		this.#gestures.push(new DragGesture(element, this.#surfaceCallbacks(surface)));
 	}
-	#bindBackdrop() {
-		const _ = this;
-		if (_.#backdropBound || !_.backdrop) return;
-		_.#gestures.push(new DragGesture(_.backdrop, _.#surfaceCallbacks("backdrop")));
-		_.#backdropBound = true;
-	}
 	#surfaceCallbacks(surface) {
 		const _ = this;
 		return {
 			onStart: (info) => _.#dragStart(surface, info?.event),
 			onMove: (info) => _.#dragMove(surface, info),
-			onEnd: (info) => _.#dragEnd(surface, info)
+			onEnd: (info) => _.#dragEnd(info)
 		};
 	}
 	#dragStart(surface, event) {
@@ -2507,26 +2604,17 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		if (_.#profile.position === "bottom") _.#engine.settleTo(_.#engine.activeSnap, 0);
 		else _.#engine.returnToRest(0);
 	}
-	#dragEnd(surface, info) {
+	#dragEnd(info) {
 		const _ = this;
 		const drag = _.#drag;
 		if (!drag.active) return;
 		_.#drag = { active: false };
-		if (!info.cancelled && surface === "backdrop" && Math.hypot(info.deltaX, info.deltaY) < 10 && info.duration < 300) {
-			if (_.dismissPolicy.backdrop) _.hide();
-			else if (drag.claimed) {
-				const velocityAway = _.#awayVelocity(info.velocityX, info.velocityY);
-				_.#emitSnapRelease(velocityAway, FLICK_VELOCITY, _.#engine.activeSnap, true);
-				_.#settleBack();
-			}
-			return;
-		}
 		if (!drag.claimed) return;
 		if (info.cancelled) {
 			_.#settleBack();
 			return;
 		}
-		const velocityAway = _.#awayVelocity(info.velocityX, info.velocityY);
+		const velocityAway = _.#awayOffset(info.velocityX, info.velocityY);
 		const resolved = resolveSnapTarget({
 			currentSize: _.#engine.currentSize,
 			velocityAway,
@@ -2535,7 +2623,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		});
 		const prevented = resolved === null && !_.dismissPolicy.swipe;
 		const target = prevented ? _.#engine.activeSnap : resolved;
-		_.#emitSnapRelease(velocityAway, FLICK_VELOCITY, target, prevented);
+		_.#emitSnapRelease(velocityAway, target, prevented);
 		if (target === null) {
 			_.#dismiss(Math.max(velocityAway, 0));
 			return;
@@ -2546,21 +2634,20 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	/**
 	* Announces a touch release decision.
 	* @param {number} velocity - Away-signed release velocity in px/ms.
-	* @param {number} flickVelocity - The threshold this input counts as a flick.
 	* @param {number|null} target - Snap index actually taken, or null for a
 	*   dismissal. Reports what happened, never what was merely resolved.
 	* @param {boolean} [prevented] - True when the gesture resolved to a dismissal
 	*   that `dismiss` refused, so a consumer can shake the panel or flag the
 	*   field that still needs an answer.
 	*/
-	#emitSnapRelease(velocity, flickVelocity, target, prevented = false) {
+	#emitSnapRelease(velocity, target, prevented = false) {
 		const _ = this;
 		_.dispatchEvent(new CustomEvent("snaprelease", {
 			bubbles: true,
 			composed: true,
 			detail: {
 				velocity,
-				flick: Math.abs(velocity) > flickVelocity,
+				flick: Math.abs(velocity) > FLICK_VELOCITY,
 				direction: velocity > 0 ? "away" : velocity < 0 ? "toward" : "none",
 				size: _.#engine.currentSize,
 				target,
@@ -2568,11 +2655,8 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			}
 		}));
 	}
-	#awayOffset(deltaX, deltaY) {
-		return awayOffset(this.#profile.position, deltaX, deltaY);
-	}
-	#awayVelocity(velocityX, velocityY) {
-		return awayOffset(this.#profile.position, velocityX, velocityY);
+	#awayOffset(x, y) {
+		return awayOffset(this.#profile.position, x, y);
 	}
 	#matchesActiveAxis(direction) {
 		if (dismissAxis(this.#profile.position) === "y") return direction === "up" || direction === "down";
@@ -2592,8 +2676,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#engine.setDismissVelocity(Math.max(0, velocityAway));
 		if (_.panel?.hide() === false) {
 			_.#engine.setDismissVelocity(0);
-			if (_.#profile.position === "bottom") _.#engine.settleTo(_.#engine.activeSnap, 0);
-			else _.#engine.returnToRest(0);
+			_.#settleBack();
 		}
 	}
 	/**
@@ -2621,7 +2704,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		};
 	}
 	#profileKey(profile) {
-		return `${profile.desktop}:${profile.position}:${profile.mode}:${profile.effect}`;
+		return `${profile.desktop}:${profile.position}:${profile.mode}`;
 	}
 	#prepareOpen() {
 		const _ = this;
@@ -2632,9 +2715,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		const snaps = _.#measureSnaps(profile);
 		const requestedIndex = resolveInitialSnap(_.getAttribute("initial-snap"), snaps);
 		if (profile.desktop) {
-			let desktopSize = snaps[snaps.length - 1];
-			if (profile.mode === "card" && (profile.position === "left" || profile.position === "right")) desktopSize = Math.min(desktopSize, _.#probeLength("--sheet-desktop-panel-width", "min(26rem, 90vw)", window.innerWidth * .9));
-			_.#snaps = [desktopSize];
+			_.#snaps = [snaps[snaps.length - 1]];
 			_.#engine.setSnaps(_.#snaps, 0);
 		} else {
 			_.#snaps = snaps;
@@ -2718,9 +2799,10 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	*
 	* `--sheet-progress` reports exactly what the engine painted, because it goes
 	* through the same `paintedProgress()` the engine's `#applyFrame` paints by:
-	* floored at 0, and capped at 1 only for a non-bottom profile, whose track is
-	* refused any paint past flush. A bottom sheet's overshoot past 1 is the
-	* intended settling breath and flows through. `--sheet-backdrop-progress`
+	* flight phases floor at 0, landed linear tracks may continue below it, and
+	* only a non-bottom profile is capped at 1 because its track is refused any
+	* paint past flush. A bottom sheet's overshoot past 1 is the intended settling
+	* breath and flows through. `--sheet-backdrop-progress`
 	* drives the overlay and follows the dismissal zone instead, so
 	* snap-to-snap travel and rubber-band overscroll leave it untouched and it
 	* always stays in [0, 1]. Both are written in the same call the engine
@@ -2728,14 +2810,15 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	* @param {number} progress - Raw frame progress; overshoots past 1 for a
 	*   bottom profile, matching what was painted.
 	* @param {number} [backdropProgress] - Dismissal-zone progress in [0, 1].
+	* @param {string} [phase] - Motion phase governing lower extrapolation.
 	*/
-	#setProgress(progress, backdropProgress = progress) {
+	#setProgress(progress, backdropProgress = progress, phase) {
 		const _ = this;
 		if (!_.#panelRef) return;
 		const clamp01 = (value) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 		const value = Number.isFinite(progress) ? progress : 0;
 		const position = _.#profile?.position;
-		const painted = position ? paintedProgress(position, value) : clamp01(value);
+		const painted = position ? paintedProgress(position, value, phase) : clamp01(value);
 		_.#panelRef.style.setProperty("--sheet-progress", painted.toFixed(3));
 		_.#panelRef.style.setProperty("--sheet-backdrop-progress", clamp01(backdropProgress).toFixed(3));
 	}
@@ -2751,7 +2834,14 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#measureSnaps(profile) {
 		const _ = this;
 		if (contentSized(profile)) return [_.#measureBox(profile).height || window.innerHeight * .5];
-		if (profile.position !== "bottom") return [_.#probeLength("--sheet-active-size", "min(26rem, 90vw)", Math.min(416, window.innerWidth * .9))];
+		if (profile.position !== "bottom") {
+			const cssFallback = "min(26rem, 90vw)";
+			const pixelFallback = Math.min(416, window.innerWidth * .9);
+			const active = () => _.#probeLength("--sheet-active-size", cssFallback, pixelFallback);
+			if (!(profile.desktop && profile.mode === "card")) return [active()];
+			const cap = _.#probeLength("--sheet-desktop-panel-width", cssFallback, pixelFallback);
+			return [_.#tokenIsSet("--sheet-active-size") ? Math.min(active(), cap) : cap];
+		}
 		const dimension = "height";
 		const viewportSize = window.innerHeight;
 		const probe = document.createElement("div");
@@ -2797,7 +2887,10 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	* measurable at all. That mirrors what SheetEngine already does during the
 	* closed-dialog flight, and the stylesheet gives the dialog `position: fixed`
 	* under a `[state]` selector that is always present — so the box it reports
-	* is the real one, not an in-flow approximation.
+	* is the real one, not an in-flow approximation. Transform is neutralised for
+	* every measurement because getBoundingClientRect includes it: otherwise a
+	* resize during a fade-scale entrance would publish the 0.95-scaled height as
+	* the profile's intrinsic resting size.
 	* @param {Object} profile - Profile to measure under.
 	* @returns {{top: number, left: number, width: number, height: number,
 	*   borderRadius: string}} The laid-out box.
@@ -2820,6 +2913,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		const closed = !dialog.open;
 		const savedDisplay = dialog.style.display;
 		const savedVisibility = dialog.style.visibility;
+		const savedTransform = dialog.style.transform;
 		_.dataset.position = profile.position;
 		_.dataset.mode = profile.mode;
 		_.dataset.desktop = String(profile.desktop);
@@ -2827,21 +2921,16 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			dialog.style.display = "flex";
 			dialog.style.visibility = "hidden";
 		}
-		const rect = dialog.getBoundingClientRect();
-		const borderRadius = getComputedStyle(dialog).borderRadius;
+		dialog.style.transform = "none";
+		const box = _.#readBox(dialog);
+		dialog.style.transform = savedTransform;
 		if (closed) {
 			dialog.style.display = savedDisplay;
 			dialog.style.visibility = savedVisibility;
 		}
 		for (const [key, value] of Object.entries(previous)) if (value === void 0) delete _.dataset[key];
 		else _.dataset[key] = value;
-		return {
-			top: rect.top,
-			left: rect.left,
-			width: rect.width,
-			height: rect.height,
-			borderRadius
-		};
+		return box;
 	}
 	/**
 	* Resolves a CSS length token to pixels with a hidden fixed-position probe.
@@ -2862,6 +2951,22 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	* @param {number} [pixelFallback=0] - Value to use when the probe measures nothing.
 	* @returns {number} Length in pixels.
 	*/
+	/**
+	* Whether a custom property actually carries a value here.
+	*
+	* `#probeLength` cannot answer this — it folds an absent token into its
+	* fallback, which is exactly the right behaviour for a single-term width and
+	* exactly the wrong one for a `min()` whose two terms have different
+	* fallbacks. Read off the dialog for the same reason `#probeLength` is: that
+	* is the element the geometry rules apply to, so it is where a consumer
+	* overriding one will have put it.
+	* @param {string} name - Custom property name.
+	* @returns {boolean} True when the property resolves to a non-empty value.
+	*/
+	#tokenIsSet(name) {
+		const _ = this;
+		return getComputedStyle(_.dialog || _).getPropertyValue(name).trim() !== "";
+	}
 	#probeLength(name, cssFallback, pixelFallback = 0) {
 		const _ = this;
 		const token = getComputedStyle(_.dialog || _).getPropertyValue(name).trim() || cssFallback;

@@ -109,7 +109,7 @@ Keep the canonical nesting intact. `dialog-panel` owns the native dialog, while 
 </script>
 ```
 
-Always open through `sheet.show(trigger)`. The method supplies `trigger || sheet` to dialog-panel because its custom engine path requires a truthy trigger. Elements with `data-action-hide-dialog` continue to use dialog-panel's built-in delegation.
+Always open through `sheet.show(trigger)`. The trigger is passed straight through to dialog-panel and is used for one thing only — returning focus when the sheet closes — so it is optional: the engine declares itself as the one animating the dialog, and that is what selects the engine transport, with or without a trigger. Pass a trigger whenever there is one; a sheet opened from a timer or a route change can call `sheet.show()` bare and focus simply returns wherever it was. Elements with `data-action-hide-dialog` continue to use dialog-panel's built-in delegation.
 
 ## Sizing
 
@@ -167,7 +167,6 @@ snapless bottom sheet: dismiss or return to their one resting size, with no near
 | `slide` | Travels clear off the configured edge and springs to rest |
 | `fade-scale` | Fades from `0` while scaling from `0.95`; the default for a desktop `center` profile |
 | `slide-fade` | Fades with a `24px` edge-directed slide |
-| `pop` | Fades in over the first 30% while scaling `0.85` → `1.05` → `1`, then exits monotonically to `0.9` |
 
 Every profile inherits `effect` unless told otherwise, with one exception: `desktop-effect` defaults
 to `fade-scale` when `desktop-position` is `center`, because a centered dialog rests against no edge
@@ -182,10 +181,10 @@ fade in below the breakpoint as well.
 
 ### Leaving
 
-By default a dismissal is the entrance run backward — except `pop`, whose bounce frame is dropped so
-a dismissal never bounces on the way out. `exit-effect` and `desktop-exit-effect` break that
-symmetry when you want it: a panel welded to the bottom edge of a phone wants to slide back down it,
-while the same panel floating as a card on a desktop often reads better shrinking away.
+By default a dismissal walks the same effect's keyframes backward. `exit-effect` and
+`desktop-exit-effect` break that symmetry when you want it: a panel welded to the bottom edge of a
+phone wants to slide back down it, while the same panel floating as a card on a desktop often reads
+better shrinking away.
 
 ```html
 <!-- slides up on a phone, shrinks away as a desktop drawer -->
@@ -202,9 +201,9 @@ three terms matter: a card sits `--sheet-card-margin` in from the edge, and a ce
 mid-screen. The cushion clears the panel's *shadow*, not just its box, so raise
 `--sheet-exit-cushion` if a soft shadow leaves a halo behind on the way out.
 
-A non-translating exit (`fade-scale`, `pop`) scales down in place from rest, and when it continues a
-live drag it carries on outward past the release pose by one cushion while it shrinks — so the fade
-continues the gesture rather than contradicting it.
+A non-translating `fade-scale` exit scales down in place from rest, and when it continues a live drag
+it carries on outward past the release pose by one cushion while it shrinks — so the fade continues
+the gesture rather than contradicting it.
 
 ### Refusing to be dismissed
 
@@ -240,12 +239,17 @@ uses the complete snap list. At or above the breakpoint, the desktop attributes 
 **`snap-points` no longer applies at all**: a desktop bottom profile measures its own content
 height, a desktop side profile uses its single CSS width, and every desktop profile is dismiss-only.
 
-Each desktop attribute falls back to its mobile twin, with one exception: **a mobile `bottom`
-position falls out to `center` on the desktop.** Both desktop shapes are content-sized, so this is
-a question of placement rather than size — a floating card in the middle of the screen reads as a
-desktop dialog, while an edge-anchored panel reads as a sheet. Say `desktop-position="bottom"` when
-the sheet should stay on the bottom edge on a wide viewport; it will still size to its content
+Each desktop attribute falls back to its mobile twin, with two exceptions. The first: **a mobile
+`bottom` position falls out to `center` on the desktop.** Both desktop shapes are content-sized, so
+this is a question of placement rather than size — a floating card in the middle of the screen reads
+as a desktop dialog, while an edge-anchored panel reads as a sheet. Say `desktop-position="bottom"`
+when the sheet should stay on the bottom edge on a wide viewport; it will still size to its content
 there, not to 85vh.
+
+The second: **`desktop-mode` does not inherit `mode` at all — it is always `card` unless you say
+otherwise.** A sheet welded flush to a phone edge is chrome floating over a page once there is room
+around it, so it takes the `--sheet-card-margin` gap on the desktop even when the mobile profile is
+`edge`. Say `desktop-mode="edge"` to weld it back.
 
 This is what lets one element be two components. A quick-shop panel is a bottom sheet with snap
 points on a phone and a right-hand drawer on a desktop; an action sheet is a bottom sheet on a
@@ -273,12 +277,12 @@ dismiss returns it to rest rather than snapping.
 | `snap-points` | `snapPoints` | `85vh` | **Mobile bottom only** — space-separated CSS heights, resolved at open and resize. Ignored past `breakpoint`, and by every non-bottom position |
 | `initial-snap` | `initialSnap` | last | Zero-based initial mobile bottom snap |
 | `position` | `position` | `bottom` | Mobile placement: `bottom`, `left`, `right`, or `center` |
-| `mode` | `mode` | `edge` | Mobile geometry: `edge` or `card` |
+| `mode` | `mode` | `edge` | Mobile geometry: `edge` or `card`. **Ignored by a `center` position** on every viewport, which rests against no edge to be flush with or float from — see the `center` note above |
 | `effect` | `effect` | `slide` | Mobile motion effect |
 | `exit-effect` | `exitEffect` | `effect` | Mobile exit effect |
 | `breakpoint` | `breakpoint` | `768` | Desktop-profile threshold in pixels |
 | `desktop-position` | `desktopPosition` | `center` for a `bottom` mobile position, else the mobile position | Desktop placement, same four values. `bottom` here is content-sized and bottom-anchored, not snap-sized |
-| `desktop-mode` | `desktopMode` | `card` | Desktop `edge` or `card` geometry |
+| `desktop-mode` | `desktopMode` | `card` | Desktop `edge` or `card` geometry. Does **not** inherit `mode` — `card` unless set, whatever the mobile mode. Ignored by a `center` desktop profile, as above |
 | `desktop-effect` | `desktopEffect` | `fade-scale` for `center`, else `effect` | Desktop motion effect |
 | `desktop-exit-effect` | `desktopExitEffect` | `exit-effect`, else `desktop-effect` | Desktop exit effect |
 | `dismiss` | `dismiss` / `dismissPolicy` | all routes | Which of `swipe backdrop escape` may dismiss; `none` for none |
@@ -302,7 +306,6 @@ Springs front-load their travel, so settle time alone does not describe how a mo
 | Phase | attraction | friction | settle | 90% of travel |
 | --- | --- | --- | --- | --- |
 | entrance | `0.055` | `0.32` | ~483ms | ~267ms |
-| pop | `0.055` | `0.325` | ~516ms | ~283ms |
 | exit | `0.3` | `0.56` | ~267ms | ~133ms |
 | snap | `0.065` | `0.3` | ~566ms | ~200ms |
 | rest | `0.15` | `0.455` | ~333ms | ~167ms |
@@ -324,7 +327,7 @@ sheet.spring = null; // back to the presets
 
 The pair governs how the sheet **arrives**. Exits and snaps keep their presets, so leaving stays brisk whatever you set. Both values are exclusive of `0` and `1`; anything else is ignored and the presets stand.
 
-Lower attraction and lower friction give a slower, looser motion; higher values give a faster, tighter one. `pop` keeps its keyframed bounce regardless — that shape lives in its keyframes, not in the spring.
+Lower attraction and lower friction give a slower, looser motion; higher values give a faster, tighter one.
 
 ## CSS Custom Properties
 
@@ -373,7 +376,7 @@ Set tokens on `:root`, a panel, or another ancestor.
 
 | Method | Description |
 | --- | --- |
-| `show(triggerEl)` | Resolve the active profile and open through dialog-panel's engine transport |
+| `show(triggerEl)` | Resolve the active profile and open through dialog-panel's engine transport. `triggerEl` is optional and only ever used for focus return |
 | `hide()` | Close through dialog-panel |
 | `snapTo(index)` | Spring a mobile bottom sheet to a zero-based snap index; inert on every other profile, which has a single snap |
 

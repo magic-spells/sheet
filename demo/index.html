@@ -77,7 +77,28 @@
 				--sheet-panel-border-radius: 25px;
 				--sheet-card-margin: 12px;
 				--sheet-card-border-radius: 20px;
-				--sheet-panel-box-shadow: 0 2px 60px rgba(0, 0, 0, 0.6), 0 0 40px rgba(139, 124, 246, 0.07);
+				/* Elevation is assembled from three named pieces so the per-position
+				   stacks below differ only where they have to — see the block after
+				   this one for the direction rule.
+
+				   --panel-catch-light is the piece that does the actual separating on
+				   a dark page. A black shadow over a near-black scrim has very little
+				   contrast left to spend, so the panel edge was reading as a flat
+				   cut-out; a 1px inset hairline along the top costs nothing and makes
+				   the sheet read as lit from above. It follows the corner radius, and
+				   nothing paints over it — sheet-header and sheet-content have no
+				   background of their own, and --sheet-footer-background sits at the
+				   opposite end of the panel. Same trick as ../bottom-sheet's demo. */
+				--panel-catch-light: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+				/* Faint on-brand rim. Symmetric on purpose: it is bloom, not depth. */
+				--panel-bloom: 0 0 40px rgba(139, 124, 246, 0.06);
+				/* The floating default — card modes and center, which are exposed on
+				   every side. A tight contact shadow hugging the box plus a wide
+				   ambient one carrying a negative spread, both offset the same way, so
+				   the pair reads as one light source rather than two halos. */
+				--sheet-panel-box-shadow:
+					var(--panel-catch-light), 0 2px 6px -2px rgba(0, 0, 0, 0.5),
+					0 18px 50px -12px rgba(0, 0, 0, 0.55), var(--panel-bloom);
 				--sheet-handle-color: #6a5f8f;
 				--sheet-handle-width: 50px;
 				--sheet-handle-height: 5px;
@@ -90,11 +111,47 @@
 				--sheet-desktop-panel-width: min(480px, 90vw);
 				--sheet-center-width: min(480px, calc(100vw - 2 * var(--sheet-card-margin)));
 
-				/* This page's shadow is a 60px blur — more than double the 28px the
-				   default cushion assumes — so an exit that only cleared the box left a
-				   visible halo hanging over the edge. The cushion is a token precisely
-				   so a soft shadow can say so. */
-				--sheet-exit-cushion: 72px;
+				/* Sized to this page's shadow rather than guessed. The furthest any
+				   layer reaches past the box on the dismissal axis is the floating
+				   ambient one — 50px of blur, offset 18 and shrunk 12, so 31px — and
+				   the cushion has to clear that or an exit leaves a halo hanging over
+				   the edge. Over-cushioning is not free either: the extra runway
+				   stretches the entrance and dilutes the release velocity, which is
+				   why this is a measured 40 and not the 72 the old 60px-blur shadow
+				   needed. */
+				--sheet-exit-cushion: 40px;
+			}
+
+			/* ------------------------------------------------
+			   Elevation per profile.
+
+			   One rule: the shadow casts toward the edge that is actually exposed.
+			   An edge-mounted panel is welded to its side of the screen, so only its
+			   inner edge is ever seen and a downward-offset shadow just walks away
+			   from the one place it was needed — a bottom sheet casts up, a left
+			   sheet casts right, a right sheet casts left. Card modes and center
+			   float clear of every edge and keep the downward default above.
+
+			   The catch-light stays on the top edge throughout: an edge sheet borrows
+			   its shadow direction from its mounting, but every profile is lit from
+			   above.
+			------------------------------------------------ */
+			dialog-panel:has(sheet-panel[data-mode='edge'][data-position='bottom']) {
+				--sheet-panel-box-shadow:
+					var(--panel-catch-light), 0 -2px 6px -2px rgba(0, 0, 0, 0.5),
+					0 -14px 50px -12px rgba(0, 0, 0, 0.55), var(--panel-bloom);
+			}
+
+			dialog-panel:has(sheet-panel[data-mode='edge'][data-position='left']) {
+				--sheet-panel-box-shadow:
+					var(--panel-catch-light), 2px 0 6px -2px rgba(0, 0, 0, 0.5),
+					14px 4px 50px -12px rgba(0, 0, 0, 0.55), var(--panel-bloom);
+			}
+
+			dialog-panel:has(sheet-panel[data-mode='edge'][data-position='right']) {
+				--sheet-panel-box-shadow:
+					var(--panel-catch-light), -2px 0 6px -2px rgba(0, 0, 0, 0.5),
+					-14px 4px 50px -12px rgba(0, 0, 0, 0.55), var(--panel-bloom);
 			}
 
 			/* ------------------------------------------------
@@ -1502,13 +1559,15 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 					<code>mode</code> and <code>effect</code> apply. At or above it, their
 					<code>desktop-*</code> twins take over. Resize across 768px while a sheet is open and it
 					morphs to the new geometry in place: no close and reopen, no lost focus, no lifecycle
-					events. Unset values inherit down the column, with one exception: a
+					events. Unset values inherit down the column, with two exceptions. A
 					<code>bottom</code> sheet becomes a centred dialog on the desktop, because a floating card
-					in the middle of the screen is what a desktop dialog reads as. Say
-					<code>desktop-position="bottom"</code> to keep it on the edge — it sizes to its content
-					there too. <code>snap-points</code> stops applying entirely past the breakpoint: every
-					desktop profile is dismiss-only, with one resting size taken from its content (bottom and
-					centre) or from a CSS token (the sides).
+					in the middle of the screen is what a desktop dialog reads as — say
+					<code>desktop-position="bottom"</code> to keep it on the edge, where it sizes to its
+					content too. And <code>desktop-mode</code> never reads <code>mode</code> at all: absent, a
+					desktop panel is always a <code>card</code>, whatever the mobile profile does.
+					<code>snap-points</code> stops applying entirely past the breakpoint: every desktop
+					profile is dismiss-only, with one resting size taken from its content (bottom and centre)
+					or from a CSS token (the sides).
 				</p>
 				<div class="ref-table">
 					<div class="ref-row ref-head">
@@ -1527,7 +1586,7 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 					<div class="ref-row">
 						<div>Flush or floating?</div>
 						<div><code>mode</code></div>
-						<div><code>desktop-mode</code></div>
+						<div><code>desktop-mode</code> → <code>card</code>, never <code>mode</code></div>
 					</div>
 					<div class="ref-row">
 						<div>How does it arrive?</div>
@@ -1639,29 +1698,27 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				<div class="spec">
 					<span class="spec-key">Effects</span>
 					<span class="spec-rule" aria-hidden="true"></span>
-					<span class="spec-val">4 named · 1 spring</span>
+					<span class="spec-val">3 named · 1 spring</span>
 				</div>
-				<h2>Four ways to arrive.</h2>
+				<h2>Three ways to arrive.</h2>
 				<p class="demo-desc">
 					An effect is how the sheet arrives. <code>slide</code> travels in from its edge,
-					<code>slide-fade</code> fades across a short <code>24px</code> slide,
-					<code>fade-scale</code> fades up in place, and <code>pop</code> scales up through a
-					keyframed bounce past rest. The four cards below are identical apart from the attribute.
+					<code>slide-fade</code> fades across a short <code>24px</code> slide, and
+					<code>fade-scale</code> fades up in place. The three cards below are identical apart from
+					the attribute.
 				</p>
 				<div class="stage controls">
 					<button class="btn" data-open="effect-slide-panel">slide</button>
 					<button class="btn" data-open="effect-fade-scale-panel">fade-scale</button>
 					<button class="btn" data-open="effect-slide-fade-panel">slide-fade</button>
-					<button class="btn" data-open="effect-pop-panel">pop</button>
 				</div>
 				<pre
-					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">effect</span>=<span class="hl-val">"pop"</span> <span class="hl-attr">desktop-effect</span>=<span class="hl-val">"fade-scale"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">effect</span>=<span class="hl-val">"slide-fade"</span> <span class="hl-attr">desktop-effect</span>=<span class="hl-val">"fade-scale"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
 
 <span class="hl-cm">// sheet-engine.js — the hidden endpoint, per effect</span>
 <span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'slide'</span>)      distance = size + inset + cushion;
 <span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'slide-fade'</span>) distance = <span class="hl-val">24</span>,   opacity = <span class="hl-val">0</span>;
-<span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'fade-scale'</span>) scale    = <span class="hl-val">0.95</span>, opacity = <span class="hl-val">0</span>;
-<span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'pop'</span>)        scale    = <span class="hl-val">0.85</span>, opacity = <span class="hl-val">0</span>;</pre>
+<span class="hl-tag">if</span> (hidden &amp;&amp; effect === <span class="hl-val">'fade-scale'</span>) scale    = <span class="hl-val">0.95</span>, opacity = <span class="hl-val">0</span>;</pre>
 			</section>
 
 			<!-- ---- 06b · Leaving ---- -->
@@ -1807,11 +1864,12 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 					<!-- Each attribute is one boxed group, mobile on the left and
 					     desktop on the right, because that is exactly how the
 					     component thinks about them: one attribute, two profiles.
-					     The desktop columns' "default" removes the attribute, so the
+					     The desktop columns' empty value removes the attribute, so the
 					     component's documented fallbacks apply: position inherits the
-					     mobile one — except a bottom, which falls out to center — mode
-					     defaults to card, and the effects fall back down their
-					     chains. -->
+					     mobile one — except a bottom, which falls out to center — the
+					     effects fall back down their chains, and desktop-mode inherits
+					     nothing at all, which is why that column names its default on
+					     the button instead of carrying a separate "default" switch. -->
 					<div class="lab-group">
 						<span class="lab-group-title" id="lab-title-position">Position</span>
 						<div class="lab-cols">
@@ -1906,11 +1964,19 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 						</div>
 					</div>
 
+					<!-- Mode answers "flush against the edge, or inset off it?", so a
+					     centred profile has no question for it to answer: the
+					     stylesheet pairs no rule with a centred position, and the
+					     engine discards edgeInset for centre. Each column is disabled
+					     against its OWN resolved position, so the desktop half greys
+					     out for this panel out of the box — a bottom sheet with no
+					     desktop-position falls out to center. -->
 					<div class="lab-group">
 						<span class="lab-group-title" id="lab-title-mode">Mode</span>
 						<div class="lab-cols">
-							<div class="lab-field">
+							<div class="lab-field" id="lab-mode-field">
 								<span class="lab-legend" id="lab-legend-mode">Mobile</span>
+								<span class="lab-hint">ignored by center</span>
 								<div class="seg" role="group" aria-labelledby="lab-title-mode lab-legend-mode">
 									<button
 										class="seg-btn is-active"
@@ -1930,8 +1996,18 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 									</button>
 								</div>
 							</div>
-							<div class="lab-field">
+							<!-- Two buttons, not three: `desktop-mode` hard-defaults to
+							     `card` rather than inheriting `mode`, so a separate
+							     "default" switch would have been a second `card`. The
+							     empty value still removes the attribute; the label just
+							     says what removing it resolves to.
+							     Default first, matching every other desktop column —
+							     these read as "what you get unless you say otherwise,
+							     then the alternatives", not as a mirror of the mobile
+							     column beside them. -->
+							<div class="lab-field" id="lab-desktop-mode-field">
 								<span class="lab-legend" id="lab-legend-desktop-mode">Desktop</span>
+								<span class="lab-hint">ignored by center</span>
 								<div
 									class="seg"
 									role="group"
@@ -1942,7 +2018,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										aria-pressed="true"
 										data-lab-group="desktop-mode"
 										data-lab-value="">
-										default
+										card (default)
 									</button>
 									<button
 										class="seg-btn"
@@ -1951,14 +2027,6 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										data-lab-group="desktop-mode"
 										data-lab-value="edge">
 										edge
-									</button>
-									<button
-										class="seg-btn"
-										type="button"
-										aria-pressed="false"
-										data-lab-group="desktop-mode"
-										data-lab-value="card">
-										card
 									</button>
 								</div>
 							</div>
@@ -1994,14 +2062,6 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										data-lab-group="effect"
 										data-lab-value="slide-fade">
 										slide-fade
-									</button>
-									<button
-										class="seg-btn"
-										type="button"
-										aria-pressed="false"
-										data-lab-group="effect"
-										data-lab-value="pop">
-										pop
 									</button>
 								</div>
 							</div>
@@ -2042,14 +2102,6 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										data-lab-group="desktop-effect"
 										data-lab-value="slide-fade">
 										slide-fade
-									</button>
-									<button
-										class="seg-btn"
-										type="button"
-										aria-pressed="false"
-										data-lab-group="desktop-effect"
-										data-lab-value="pop">
-										pop
 									</button>
 								</div>
 							</div>
@@ -2097,14 +2149,6 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										data-lab-value="slide-fade">
 										slide-fade
 									</button>
-									<button
-										class="seg-btn"
-										type="button"
-										aria-pressed="false"
-										data-lab-group="exit-effect"
-										data-lab-value="pop">
-										pop
-									</button>
 								</div>
 							</div>
 							<div class="lab-field">
@@ -2144,14 +2188,6 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										data-lab-group="desktop-exit-effect"
 										data-lab-value="slide-fade">
 										slide-fade
-									</button>
-									<button
-										class="seg-btn"
-										type="button"
-										aria-pressed="false"
-										data-lab-group="desktop-exit-effect"
-										data-lab-value="pop">
-										pop
 									</button>
 								</div>
 							</div>
@@ -2378,14 +2414,14 @@ sheet.hide();</pre>
 						<div><code>effect</code></div>
 						<div><code>slide</code></div>
 						<div>
-							Mobile motion: <code>slide</code>, <code>fade-scale</code>, <code>slide-fade</code>,
-							or <code>pop</code>.
+							Mobile motion: <code>slide</code>, <code>fade-scale</code>, or
+							<code>slide-fade</code>.
 						</div>
 					</div>
 					<div class="ref-row">
 						<div><code>exit-effect</code></div>
 						<div><code>effect</code></div>
-						<div>Mobile exit effect. Same four values; falls back to <code>effect</code>.</div>
+						<div>Mobile exit effect. Same three values; falls back to <code>effect</code>.</div>
 					</div>
 					<div class="ref-row">
 						<div><code>breakpoint</code></div>
@@ -2415,18 +2451,22 @@ sheet.hide();</pre>
 					<div class="ref-row">
 						<div><code>desktop-mode</code></div>
 						<div><code>card</code></div>
-						<div>Desktop geometry: <code>edge</code> or <code>card</code>.</div>
+						<div>
+							Desktop geometry: <code>edge</code> or <code>card</code>. It does not inherit
+							<code>mode</code> — absent, it is always <code>card</code> — and a
+							<code>center</code> profile ignores it, having no edge to sit flush against.
+						</div>
 					</div>
 					<div class="ref-row">
 						<div><code>desktop-effect</code></div>
 						<div><code>fade-scale</code> for <code>center</code>, else <code>effect</code></div>
-						<div>Desktop motion effect. Same four values.</div>
+						<div>Desktop motion effect. Same three values.</div>
 					</div>
 					<div class="ref-row">
 						<div><code>desktop-exit-effect</code></div>
 						<div><code>exit-effect</code>, else <code>desktop-effect</code></div>
 						<div>
-							Desktop exit effect. Same four values; falls back through
+							Desktop exit effect. Same three values; falls back through
 							<code>exit-effect</code> to <code>desktop-effect</code>.
 						</div>
 					</div>
@@ -2498,7 +2538,11 @@ sheet.hide();</pre>
 					<div class="ref-row">
 						<div><code>--sheet-panel-box-shadow</code></div>
 						<div>layered shadow</div>
-						<div>Panel elevation.</div>
+						<div>
+							Panel elevation. This page overrides it per profile — a contact shadow plus a wide
+							ambient one, both cast toward the edge the panel actually exposes, under a 1px inset
+							catch-light along the top.
+						</div>
 					</div>
 					<div class="ref-row">
 						<div><code>--sheet-handle-color</code></div>
@@ -3502,35 +3546,7 @@ sheet.hide();</pre>
 								<code>24px</code> of edge-directed travel while the opacity comes up. Just enough
 								motion to say which direction the sheet belongs to.
 							</p>
-							<p>The most restrained of the four, and the easiest to repeat often.</p>
-						</div>
-					</sheet-content>
-				</sheet-panel>
-			</dialog>
-		</dialog-panel>
-
-		<dialog-panel id="effect-pop-panel">
-			<dialog aria-labelledby="effect-pop-title">
-				<sheet-panel mode="card" effect="pop" breakpoint="9999" snap-points="46vh">
-					<sheet-header>
-						<div class="sheet-header">
-							<h3 id="effect-pop-title">
-								<span class="sheet-eyebrow">effect="pop"</span>
-								Lets the spring show
-							</h3>
-							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
-						</div>
-					</sheet-header>
-					<sheet-content>
-						<div class="sheet-copy">
-							<p>
-								Scale from <code>0.85</code> while the opacity comes up, then past rest to
-								<code>1.05</code> before settling. The bounce is written into the keyframes, not
-								borrowed from the spring — <code>pop</code>'s spring does not overshoot at all.
-							</p>
-							<p>
-								Open it right after <code>fade-scale</code> — same family, very different arrival.
-							</p>
+							<p>The most restrained of the three, and the easiest to repeat often.</p>
 						</div>
 					</sheet-content>
 				</sheet-panel>
@@ -4015,6 +4031,44 @@ sheet.hide();</pre>
 				else labSheet.removeAttribute('snap-points');
 			};
 
+			// `mode` and `desktop-mode` decide flush-versus-floating against an EDGE,
+			// so a centred profile has nothing for them to decide: sheet.css carries no
+			// rule pairing a centred position with a mode, and the engine discards
+			// edgeInset for centre. Same treatment the snaps get — disable the column,
+			// drop the inert attribute, and keep each switch's own state for whenever a
+			// position that reads it comes back.
+			//
+			// Each column is gated on its own resolved position, read through the
+			// component's own getters rather than a copy of the fallback rule: an unset
+			// `desktop-position` on a bottom sheet resolves to `center`, which is
+			// exactly this panel's starting profile, so the desktop column is inert on
+			// first paint.
+			const labModeFields = [
+				{ attr: 'mode', desktop: false, field: $('#lab-mode-field') },
+				{ attr: 'desktop-mode', desktop: true, field: $('#lab-desktop-mode-field') },
+			].map((entry) => ({
+				...entry,
+				buttons: [...entry.field.querySelectorAll(`[data-lab-group="${entry.attr}"]`)],
+			}));
+
+			const applyLabModes = () => {
+				for (const { attr, desktop, field, buttons } of labModeFields) {
+					const centered = (desktop ? labSheet.desktopPosition : labSheet.position) === 'center';
+					field.setAttribute('aria-disabled', String(centered));
+					for (const button of buttons) button.disabled = centered;
+					if (centered) {
+						labSheet.removeAttribute(attr);
+						continue;
+					}
+					// Re-derive from whichever switch is still selected, so leaving
+					// center restores the choice the column was already showing.
+					const value = buttons.find((button) => button.classList.contains('is-active'))?.dataset
+						.labValue;
+					if (value) labSheet.setAttribute(attr, value);
+					else labSheet.removeAttribute(attr);
+				}
+			};
+
 			// All three routes open is the default, so the attribute stays absent —
 			// the snippet then shows the difference between a plain sheet and one that
 			// has actually been locked down. All three off is `dismiss="none"`.
@@ -4107,8 +4161,11 @@ sheet.hide();</pre>
 				if (labValue) labSheet.setAttribute(labGroup, labValue);
 				else labSheet.removeAttribute(labGroup);
 
-				applyLabSnaps();
+				// Active state first: applyLabModes re-derives each column from the
+				// switch that is selected, so it has to run after the selection moves.
 				setSegActive(labGroup, button);
+				applyLabSnaps();
+				applyLabModes();
 				renderLabCode();
 			});
 
@@ -4155,6 +4212,7 @@ sheet.hide();</pre>
 			// First paint reads the markup rather than a defaults table, so the
 			// starting snippet is true even if the panel's attributes are edited.
 			applyLabSnaps();
+			applyLabModes();
 			applyLabDismiss();
 			applySpring(false);
 		</script>

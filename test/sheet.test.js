@@ -64,7 +64,6 @@ function makeSheet() {
 	const sheet = new SheetPanel();
 	const panel = new StubElement('dialog-panel');
 	const dialog = new StubElement('dialog');
-	const backdrop = new StubElement('dialog-backdrop');
 	dialog.rect = {
 		top: 0,
 		left: 0,
@@ -74,16 +73,11 @@ function makeSheet() {
 		height: 500,
 	};
 	panel.isOpen = false;
-	panel.hideCalls = 0;
-	panel.hide = () => {
-		panel.hideCalls++;
-		return true;
-	};
-	panel.queryResults.set('dialog-backdrop', backdrop);
+	panel.hide = () => true;
 	sheet.closestResults.set('dialog-panel', panel);
 	sheet.closestResults.set('dialog', dialog);
 	sheet.connectedCallback();
-	return { backdrop, dialog, engine: panel.morphEngine, panel, sheet };
+	return { dialog, engine: panel.morphEngine, panel, sheet };
 }
 
 elementTest('show passes the trigger straight through — never substituting the sheet', (t) => {
@@ -188,41 +182,6 @@ elementTest(
 	}
 );
 
-elementTest('a refused backdrop micro-drag settles exactly back to the active snap', async (t) => {
-	const frames = captureFrames(t);
-	const { backdrop, dialog, engine, panel, sheet } = makeSheet();
-	t.after(() => sheet.disconnectedCallback());
-	sheet.setAttribute('snap-points', '500px');
-	sheet.setAttribute('dismiss', 'swipe escape');
-	panel.fire('beforeShow');
-	panel.isOpen = true;
-	const opening = engine.show({ to: dialog });
-	drainFrames(frames);
-	await opening;
-
-	backdrop.fire('pointerdown', pointer());
-	backdrop.fire('pointermove', pointer({ clientY: 6, timeStamp: 20 }));
-	assert.equal(engine.currentSize, 494, 'the unslopped move paints the six-pixel displacement');
-	backdrop.fire('pointerup', pointer({ clientY: 6, timeStamp: 40 }));
-	drainFrames(frames);
-
-	assert.equal(panel.hideCalls, 0);
-	const release = sheet.dispatchedEvents.at(-1);
-	assert.equal(release.type, 'snaprelease');
-	assert.equal(release.bubbles, true);
-	assert.equal(release.composed, true);
-	assert.deepEqual(release.detail, {
-		velocity: 0.15,
-		flick: false,
-		direction: 'away',
-		size: 494,
-		target: 0,
-		prevented: true,
-	});
-	assert.equal(engine.currentSize, 500);
-	assert.equal(dialog.style.transform, 'translate3d(0px, 0px, 0px) scale(1)');
-});
-
 // A bottom panel is sized by a snap point, so inheriting itself past the
 // breakpoint stands a one-paragraph sheet as a full-width 85vh slab. Center is
 // the one profile sized by its own content, so that is where bottom falls out
@@ -246,4 +205,202 @@ elementTest('an unstated desktop position falls out to center only from bottom',
 		sheet.setAttribute('position', position);
 		assert.equal(sheet.desktopPosition, position, `${position} inherits itself`);
 	}
+});
+
+elementTest(
+	'a widened desktop side-card token is the exact engine rest width on both sides',
+	(t) => {
+		const { dialog, engine, panel, sheet } = makeSheet();
+		t.after(() => sheet.disconnectedCallback());
+		const originalWidth = window.innerWidth;
+		window.innerWidth = 1200;
+		t.after(() => {
+			window.innerWidth = originalWidth;
+		});
+
+		const originalComputedStyle = globalThis.getComputedStyle;
+		stubGlobal(t, 'getComputedStyle', (element) => {
+			const computed = originalComputedStyle(element);
+			return {
+				...computed,
+				getPropertyValue(name) {
+					if (element === dialog && name === '--sheet-desktop-panel-width') {
+						return 'min(480px, 90vw)';
+					}
+					return computed.getPropertyValue(name);
+				},
+			};
+		});
+
+		const originalCreateElement = document.createElement;
+		document.createElement = (tagName) => {
+			const element = originalCreateElement(tagName);
+			const readRect = element.getBoundingClientRect.bind(element);
+			element.getBoundingClientRect = () => {
+				const width = String(element.style.width || '').trim();
+				if (width === 'min(480px, 90vw)') {
+					return { top: 0, left: 0, right: 480, bottom: 0, width: 480, height: 0 };
+				}
+				if (width === 'min(26rem, 90vw)') {
+					return { top: 0, left: 0, right: 416, bottom: 0, width: 416, height: 0 };
+				}
+				return readRect();
+			};
+			return element;
+		};
+		t.after(() => {
+			document.createElement = originalCreateElement;
+		});
+
+		sheet.setAttribute('desktop-mode', 'card');
+		for (const position of ['left', 'right']) {
+			sheet.setAttribute('position', position);
+			panel.fire('beforeShow');
+			assert.deepEqual(engine.snaps, [480], `${position} card rests at its painted 480px`);
+		}
+
+		// Edge mode deliberately uses the generic side-width fallback, not the
+		// desktop card token. Pinning it here prevents the card fix spreading into
+		// geometry whose existing 26rem fallback is already correct.
+		sheet.setAttribute('desktop-mode', 'edge');
+		panel.fire('beforeShow');
+		assert.deepEqual(engine.snaps, [416]);
+	}
+);
+
+elementTest('a consumer --sheet-active-size still caps a desktop side card', (t) => {
+	// The other half of the same CSS expression. A desktop card is painted
+	// `min(var(--sheet-active-size, var(--sheet-desktop-panel-width)),
+	// var(--sheet-desktop-panel-width))` — a min of two terms, not a choice
+	// between them. Probing only the desktop token satisfies the widened-token
+	// test above while silently ignoring the narrower width a consumer asked
+	// for, which is the same divergence that test exists to catch, mirrored.
+	// CLAUDE.md's sizing rules name --sheet-active-size as THE way to give a
+	// side sheet its width, so this is the documented path, not a corner.
+	const { dialog, engine, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const originalWidth = window.innerWidth;
+	window.innerWidth = 1200;
+	t.after(() => {
+		window.innerWidth = originalWidth;
+	});
+
+	const originalComputedStyle = globalThis.getComputedStyle;
+	stubGlobal(t, 'getComputedStyle', (element) => {
+		const computed = originalComputedStyle(element);
+		return {
+			...computed,
+			getPropertyValue(name) {
+				if (element === dialog && name === '--sheet-desktop-panel-width') {
+					return 'min(480px, 90vw)';
+				}
+				if (element === dialog && name === '--sheet-active-size') return '300px';
+				return computed.getPropertyValue(name);
+			},
+		};
+	});
+
+	const originalCreateElement = document.createElement;
+	document.createElement = (tagName) => {
+		const element = originalCreateElement(tagName);
+		const readRect = element.getBoundingClientRect.bind(element);
+		element.getBoundingClientRect = () => {
+			const width = String(element.style.width || '').trim();
+			if (width === 'min(480px, 90vw)') {
+				return { top: 0, left: 0, right: 480, bottom: 0, width: 480, height: 0 };
+			}
+			if (width === '300px') {
+				return { top: 0, left: 0, right: 300, bottom: 0, width: 300, height: 0 };
+			}
+			return readRect();
+		};
+		return element;
+	};
+	t.after(() => {
+		document.createElement = originalCreateElement;
+	});
+
+	sheet.setAttribute('desktop-mode', 'card');
+	sheet.setAttribute('position', 'right');
+	panel.fire('beforeShow');
+	assert.deepEqual(engine.snaps, [300], 'the narrower consumer width wins the min');
+
+	// And edge mode, which has no cap at all, takes it whole.
+	sheet.setAttribute('desktop-mode', 'edge');
+	panel.fire('beforeShow');
+	assert.deepEqual(engine.snaps, [300], 'edge mode reads the same token with no cap');
+});
+
+elementTest(
+	'changing effect on an open panel updates the profile without a no-op morph',
+	async (t) => {
+		const frames = captureFrames(t);
+		const { dialog, engine, panel, sheet } = makeSheet();
+		t.after(() => sheet.disconnectedCallback());
+		sheet.setAttribute('snap-points', '500px');
+		panel.fire('beforeShow');
+		panel.isOpen = true;
+		const opening = engine.show({ to: dialog });
+		drainFrames(frames);
+		await opening;
+
+		sheet.setAttribute('effect', 'slide-fade');
+		sheet.attributeChangedCallback('effect', null, 'slide-fade');
+
+		assert.equal(engine.state, 'shown');
+		assert.equal(engine.morphing, false);
+		assert.equal(sheet.dataset.effect, 'slide-fade');
+		assert.equal(dialog.style.transition, undefined);
+	}
+);
+
+elementTest(
+	'changing desktop-effect on an open desktop panel updates without a no-op morph',
+	async (t) => {
+		const frames = captureFrames(t);
+		const originalWidth = window.innerWidth;
+		window.innerWidth = 1200;
+		t.after(() => {
+			window.innerWidth = originalWidth;
+		});
+		const { dialog, engine, panel, sheet } = makeSheet();
+		t.after(() => sheet.disconnectedCallback());
+		sheet.setAttribute('position', 'right');
+		dialog.style.setProperty('--sheet-desktop-panel-width', '480px');
+		panel.fire('beforeShow');
+		panel.isOpen = true;
+		const opening = engine.show({ to: dialog });
+		drainFrames(frames);
+		await opening;
+
+		sheet.setAttribute('desktop-effect', 'slide-fade');
+		sheet.attributeChangedCallback('desktop-effect', null, 'slide-fade');
+
+		assert.equal(engine.state, 'shown');
+		assert.equal(engine.morphing, false);
+		assert.equal(sheet.dataset.effect, 'slide-fade');
+		assert.equal(dialog.style.transition, undefined);
+	}
+);
+
+elementTest('intrinsic box measurement neutralises and restores an inline transform', (t) => {
+	const originalWidth = window.innerWidth;
+	window.innerWidth = 1200;
+	t.after(() => {
+		window.innerWidth = originalWidth;
+	});
+	const { dialog, engine, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const entranceTransform = 'translate3d(0px, 0px, 0px) scale(0.95)';
+	dialog.style.transform = entranceTransform;
+	dialog.getBoundingClientRect = () => {
+		const transformed = dialog.style.transform !== 'none';
+		const height = transformed ? 475 : 500;
+		return { top: 0, left: 0, right: 400, bottom: height, width: 400, height };
+	};
+
+	panel.fire('beforeShow');
+
+	assert.deepEqual(engine.snaps, [500]);
+	assert.equal(dialog.style.transform, entranceTransform);
 });
