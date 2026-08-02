@@ -230,10 +230,15 @@ dialog-panel[morph][state]:has(sheet-panel[data-mode='edge'][data-position='righ
    very thing in flight. dialog-panel keeps the native ::backdrop transparent
    for every panel, so nothing has to be neutralised here.
 
-   Clicks land on dialog-backdrop rather than on the dialog, but the dismiss
-   policy is unaffected: #outsideGuard is bound to dialog-panel in the CAPTURE
-   phase, so it still runs ahead of DialogBackdrop's own click handler and a
-   refused dismissal never reaches it. */
+   This element never receives a pointer event, and cannot. showModal() makes
+   everything outside the dialog's own subtree inert, and dialog-backdrop is a
+   SIBLING of the dialog — so the native ::backdrop wins every hit test in the
+   scrim region and reports the dialog as its target. (Measured: elementFromPoint
+   at any scrim point returns the dialog; pointer-events:none on ::backdrop does
+   not hand events down here either, it drops them on <html>.) This is a paint
+   surface only. Every scrim gesture is read off the dialog by geometry —
+   #outsideGuard, bound to dialog-panel in the CAPTURE phase so it runs ahead of
+   dialog-panel's own bubble-phase dialogClick. */
 dialog-panel:has(sheet-panel) > dialog-backdrop {
 	background: var(--sheet-overlay-background);
 	backdrop-filter: blur(var(--sheet-overlay-blur));

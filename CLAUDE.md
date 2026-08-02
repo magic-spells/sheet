@@ -199,7 +199,8 @@ so the retune is not rediscovered as an obvious win.
 #### No seed may outrun the spring that receives it
 
 Normalising over the span is what makes a release velocity mean something; it is also what makes a
-*short* run explosive, because the seed scales as `1/span`. Two runs cap it, and both take the cap
+*short* run explosive, because the seed scales as `1/span`. All three runs that take a release
+velocity cap it, and each takes the cap
 from the same quantity: `terminalSeed(preset, distance)` — the velocity that spring could have built
 for itself under a constant attraction over `distance`, held until friction balanced it, which in
 the seed's pre-damping units is `distance × attraction / friction`.
@@ -215,6 +216,25 @@ the seed's pre-damping units is `distance × attraction / friction`.
   becomes overshoot past `TRAVEL`, and a snapless profile's paint clamp is obliged to eat it: a
   20px pull flicked at 3 px·ms⁻¹ painted **one** pose and then sat motionless for 317ms while the
   spring finished running.
+- **`dismiss`** caps at `EXIT_VELOCITY_LIMIT = terminalSeed(SPRING_PRESETS.exit, TRAVEL)`. It was the
+  run that had none, and it is the same short-run explosion reached from the other direction: a
+  dismissal normalises over the runway it has **left**, so a deep drag makes the span tiny. A 373px
+  centred dialog dragged to a logical 10px has 28px of `fade-scale` runway; a 2 px·ms⁻¹ flick seeded
+  ~131 units into a spring whose own terminal velocity is ~54. Measured, that drove `p` to
+  **−0.242** and left **17 frames (~283ms)** in which the panel was already gone but `hidden` — and
+  with it `dialog.close()`, focus return and scroll unlock — had not fired. Capped it undershoots
+  0.005 with a 6-frame tail. A `slide` exit continuing the same drag had the milder version of it.
+
+**The fix is the cap, not a wider `exitTravel` floor, and the difference matters.** The obvious
+reading is that the floor should be the panel's *painted* extent rather than its logical `size`,
+since a drag translates an intrinsically sized panel instead of shrinking it. It measures well on
+`fade-scale` — and it reintroduces the bug `exitTravel`'s own docstring records, because a
+**translating** exit's span really is the runway left: flooring a slide at the resting size
+understates a flick by ~2.8× and returns every flick-to-close to the same speed however hard it was
+thrown. Two pinned tests fail on that change and they are right to. The floor is the extent still
+showing; what was unbounded was the seed. From-rest exits never reach the cap at any realistic
+velocity, so only the deep-drag case moves, and a flick still reads below the cap
+(267 / 217 / 150ms across `v = 0 / 0.5 / 1`) before saturating exactly as the other two runs do.
 
 **The return cap was first written as the bare attraction impulse**, dropping the `/ friction` term
 — 0.455× too small — and it swallowed every flick whole: `v = 1` and `v = 3` both returned in an
@@ -235,6 +255,18 @@ beyond it, so anything past flush is extrapolation. This cannot be tuned away: a
 past 100 is *collinear* with the track and changes nothing, which is why the fix is to refuse to
 paint it rather than to bend the geometry. `returnToRest`'s upper clamp on `start` depends on this —
 the panel is already at `p = 1`, so the spring starts where the panel actually is.
+
+**That clamp is a cap and never a floor, and the asymmetry is the whole point.** `start` was written
+as `clamp(size / targetSize, 0, 1)`, but only the upper bound has the argument above behind it.
+Below zero there is no refusal to paint: the landed phases extrapolate under `0` precisely so an
+inset or centred panel can be carried off screen 1:1, and `#applyLiveOffset` rubber-bands a pull past
+the closed edge to about `-2·√(overpull)`. The floor therefore started the spring somewhere the panel
+was not — a right sheet resting at 400px and overpulled to −20px paints `translate3d(420px, …)`, and
+a floored start painted `400px` on its very first frame, teleporting the whole overpull away before
+the spring had moved. `settleTo` has never clamped its start and has never had the defect. The
+regression test asserts it **comparatively** — a flush release and a 20px-overpulled release must not
+produce the same frame sequence — because the floor's signature is making two physically different
+releases identical, and because a single measured constant would only record whatever the code emits.
 
 For a side sheet the symptom is concrete: it is fixed width against its edge, so every position past
 flush translates it inward and opens a sliver of backdrop down the side — from an inward
@@ -768,10 +800,35 @@ one axis per profile forbade panning on the other for every descendant — the s
 
 - `FLICK_VELOCITY = 0.5 px/ms`
 - `OVERSCROLL_RESISTANCE = 0.2`
-- Backdrop tap: under `10px` and `300ms`
 - Resize throttle: `100ms`
 
-Header, footer, and backdrop always claim. Content defers to its scroll chain and claims only once that chain has no room left in the gesture's direction — see the scroll claim policy above. The content's single non-passive `touchmove` listener vetoes scrolling only after a drag is claimed.
+Header and footer always claim. Content defers to its scroll chain and claims only once that chain has no room left in the gesture's direction — see the scroll claim policy above. The content's single non-passive `touchmove` listener vetoes scrolling only after a drag is claimed.
+
+**The scrim is not a drag surface, and `<dialog-backdrop>` is not an event target.** `showModal()`
+makes everything outside the dialog's own subtree inert, and `<dialog-backdrop>` is a *sibling* of
+the dialog — so the native `::backdrop` wins every hit test in the scrim region and reports the
+**dialog** as its target. Measured, not inferred: `elementFromPoint` returns the dialog at every
+scrim point, and `pointer-events: none` on `::backdrop` does not hand events down to the element
+either, it drops them on `<html>`. dialog-panel's own `DialogBackdrop` click listener is therefore
+dead for every modal consumer. The element is a paint surface — scrim colour, `backdrop-filter`,
+opacity — and it must stay an element rather than the pseudo-element so a morph blob can fly above
+the scrim and below the dialog.
+
+So every scrim gesture is read off the dialog by geometry. `#outsideGuard` is capture-phase on
+`dialog-panel`, ahead of dialog-panel's bubble-phase `dialogClick`, and it refuses an outside click
+for two independent reasons: the `dismiss` policy forbids `backdrop`, **or** the gesture did not
+begin on the scrim.
+
+That second condition is the one with a bug behind it. `click` is dispatched at the release point
+and retargeted — to the dialog for a plain scrim tap, and to whatever held **pointer capture** for a
+drag, which is inside the panel. `dialogClick` only tests coordinates, so selecting text in the
+sheet and releasing past its edge closed the sheet. `#scrimPress` records whether `pointerdown`
+landed on the dialog itself, which separates that release from a genuine tap **without** a distance
+gate — a distance gate would refuse the near-miss swipe, where a user aims for the sheet's edge,
+lands just above it, and swipes. Starting position answers both; travelled distance answers neither.
+The old target-based exemption (`dialogRef.contains(target)`) had to go: it was exactly what waved
+the captured release through. Every ordinary click on panel content lands inside the rect and
+returns on the geometry test instead.
 
 The panel itself is the fifth surface, and it exists for one region: a side sheet's handle strip. The
 pill is the panel's own `::before`, sitting in padding no child surface covers, so without this

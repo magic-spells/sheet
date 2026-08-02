@@ -109,6 +109,31 @@ elementTest('show passes the trigger straight through — never substituting the
 	assert.equal(panel.morphEngine.animatesDialog, true);
 });
 
+elementTest('dialog-panel show is vetoed above max-display-width', (t) => {
+	const frames = captureFrames(t);
+	const originalWidth = window.innerWidth;
+	window.innerWidth = 901;
+	t.after(() => {
+		window.innerWidth = originalWidth;
+	});
+	const result = makeSheet();
+	const { dialog, engine, panel, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	sheet.maxDisplayWidth = 900;
+	let beforeShow;
+	panel.addEventListener('beforeShow', (event) => {
+		beforeShow = event;
+	});
+
+	assert.equal(panel.show(), false);
+	assert.equal(beforeShow.defaultPrevented, true);
+	assert.equal(panel.isOpen, false);
+	assert.equal(dialog.open, false);
+	assert.equal(engine.state, 'hidden');
+	assert.equal(frames.length, 0, 'the refused route never starts an entrance');
+});
+
 function makeTrigger() {
 	const trigger = new StubElement('button');
 	trigger.rect = {
@@ -909,6 +934,36 @@ function startProfileMorph(sheet, from, to) {
 	sheet.attributeChangedCallback('position', from, to);
 }
 
+elementTest('profile morph durations accept only CSS time tokens', (t) => {
+	const { dialog, engine, sheet } = openStyledSheet(t);
+	const cases = [
+		['600ms', 600],
+		['0.6s', 600],
+		['600', 600],
+		['0s', 0],
+		['garbage', 600],
+	];
+	let from = 'right';
+
+	for (const [token, milliseconds] of cases) {
+		const to = from === 'right' ? 'left' : 'right';
+		dialog.style.setProperty('--sheet-morph-duration', token);
+		startProfileMorph(sheet, from, to);
+
+		if (milliseconds === 0) {
+			assert.equal(engine.morphing, false, `${token} collapses the morph`);
+			assert.equal(dialog.style.transition, '');
+		} else {
+			assert.equal(engine.morphing, true, `${token} starts the morph`);
+			assert.match(dialog.style.transition, new RegExp(`top ${milliseconds}ms `));
+			assert.doesNotMatch(dialog.style.transition, /var\(--sheet-morph-duration/);
+			dialog.fire('transitionend', { target: dialog, propertyName: 'height' });
+		}
+
+		from = to;
+	}
+});
+
 // The FLIP writes its pins onto the same inline properties a consumer may
 // already have set, so blanking them on teardown silently deleted styles the
 // component never owned. Every path that ends a morph has to restore instead.
@@ -1377,4 +1432,65 @@ elementTest('a vetoed trigger-morph show disarms the hidden engine', (t) => {
 	assert.equal(blob.runs.at(-1).from, triggerB);
 	assert.equal(blob.runs.at(-1).to.tagName, 'DIALOG');
 	blob.step(1);
+});
+
+/**
+ * Drives the capture-phase scrim guard the way the browser does: a pointerdown
+ * that records where the gesture began, then the click the browser retargets
+ * and dispatches at the RELEASE coordinates.
+ *
+ * The dialog stub's rect is 0,0 → 400,500, so anything above y=0 is scrim.
+ * @param {Object} panel - dialog-panel stub the guard is bound to.
+ * @param {Object} pressTarget - Element the gesture started on.
+ * @param {Object} release - Release coordinates.
+ * @returns {boolean} True when the guard swallowed the click.
+ */
+function scrimGesture(panel, pressTarget, release) {
+	panel.fire('pointerdown', { target: pressTarget });
+	const click = panel.fire('click', { target: pressTarget, ...release });
+	return click.propagationStopped;
+}
+
+elementTest('a press on panel content that releases on the scrim is not a tap', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const content = new StubElement('sheet-content');
+
+	// The bug this guards: pointer capture retargets the click to whatever held
+	// it — inside the panel — while dialog-panel's dialogClick only ever tests
+	// the release COORDINATES, which are out on the scrim. Selecting text and
+	// letting go past the edge closed the sheet.
+	assert.equal(scrimGesture(panel, content, { clientX: 200, clientY: -80 }), true);
+
+	// A genuine scrim tap is untouched: same release point, gesture began there.
+	assert.equal(scrimGesture(panel, dialog, { clientX: 200, clientY: -80 }), false);
+});
+
+elementTest('a swipe that begins on the scrim still dismisses however far it travels', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	// The near-miss case: aiming for the sheet's edge, landing just above it,
+	// then swiping. A distance-based tap gate would refuse this; starting
+	// position is what separates it from the selection release above.
+	assert.equal(scrimGesture(panel, dialog, { clientX: 200, clientY: -220 }), false);
+});
+
+elementTest('an ordinary click inside the panel box never reaches the guard', (t) => {
+	const { panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const button = new StubElement('button');
+
+	// Inside the rect, so the geometry test returns before any policy question.
+	// Dropping the old target-based exemption must not start swallowing these.
+	assert.equal(scrimGesture(panel, button, { clientX: 200, clientY: 250 }), false);
+});
+
+elementTest('dismiss="none" still refuses a scrim tap it would otherwise allow', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('dismiss', 'none');
+
+	assert.equal(sheet.dismissPolicy.backdrop, false);
+	assert.equal(scrimGesture(panel, dialog, { clientX: 200, clientY: -80 }), true);
 });

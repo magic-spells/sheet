@@ -173,6 +173,7 @@ class SheetPanel extends HTMLElement {
 	#dialogRef = null;
 	#gestures = [];
 	#scrollVeto = null;
+	#scrimPress = false;
 	#connected = false;
 	#profile = null;
 	#snaps = [];
@@ -220,7 +221,11 @@ class SheetPanel extends HTMLElement {
 		super();
 		const _ = this;
 		_.#handlers = {
-			beforeShow: () => {
+			beforeShow: (event) => {
+				if (window.innerWidth > _.maxDisplayWidth) {
+					event.preventDefault();
+					return;
+				}
 				// Reset before the run starts; a reversal's synchronous reveal
 				// re-emit lands after this and re-marks the promotion it performs.
 				_.#proxyRevealed = false;
@@ -267,22 +272,39 @@ class SheetPanel extends HTMLElement {
 				event.preventDefault();
 				event.stopPropagation();
 			},
+			// Records where a gesture BEGAN, which is the only thing that
+			// distinguishes a scrim tap from a drag that merely ended out there —
+			// `click` fires on the nearest common ancestor of press and release, so
+			// a press inside the panel that releases on the scrim arrives retargeted
+			// to the dialog and looks identical to a tap. See #outsideGuard.
+			scrimPress: (event) => {
+				_.#scrimPress = event.target === _.#dialogRef;
+			},
 			outsideGuard: (event) => {
-				if (_.dismissPolicy.backdrop || !_.#dialogRef) return;
-				// A real element inside the panel is an answer, not a dismissal, and
-				// must pass through untouched.
-				const target = event.target;
-				if (_.#dialogRef.contains(target) && target !== _.#dialogRef) return;
-				// The overlay, or the native ::backdrop — which reports the dialog
-				// itself as its target, so geometry is the only way to tell. Same test
-				// dialog-panel uses, deliberately.
+				if (!_.#dialogRef) return;
+				// Geometry, not target, and that is load-bearing in BOTH directions.
+				// The native ::backdrop reports the dialog itself as its target, so a
+				// scrim tap can only be recognised by position — the same test
+				// dialog-panel uses, deliberately. And a drag that began on panel
+				// content arrives retargeted to whatever held pointer capture, which
+				// is inside the panel, so a target-based exemption would wave through
+				// the exact release this guard exists to catch. Every ordinary click
+				// on panel content lands inside the rect and returns here.
 				const rect = _.#dialogRef.getBoundingClientRect();
 				const outside =
 					event.clientX < rect.left ||
 					event.clientX > rect.right ||
 					event.clientY < rect.top ||
 					event.clientY > rect.bottom;
-				if (outside) event.stopPropagation();
+				if (!outside) return;
+				// Two separate reasons to refuse an outside click, and they are
+				// deliberately not the same question. The policy may forbid backdrop
+				// dismissal outright; and a gesture that started on panel content is a
+				// selection or a mis-drag, never a tap, however far out it let go.
+				// A keyboard-driven click carries no preceding pointerdown, but it is
+				// dispatched at the activated element's own position — inside the rect
+				// — so it returns above rather than reaching this line.
+				if (!_.dismissPolicy.backdrop || !_.#scrimPress) event.stopPropagation();
 			},
 			// A native close — <form method="dialog"> or app-level dialog.close() —
 			// landing between the proxy reveal and the blob settle reaches neither of
@@ -422,7 +444,10 @@ class SheetPanel extends HTMLElement {
 			_.#panelRef.addEventListener('shown', _.#handlers.shown);
 			_.#panelRef.addEventListener('hidden', _.#handlers.hidden);
 			// Capture, so a refused outside click never reaches dialog-panel's own
-			// bubble-phase handler on the dialog.
+			// bubble-phase handler on the dialog. The pointerdown tracker shares the
+			// phase for the same reason: it has to observe the press even when a
+			// surface's own gesture stops propagation later.
+			_.#panelRef.addEventListener('pointerdown', _.#handlers.scrimPress, true);
 			_.#panelRef.addEventListener('click', _.#handlers.outsideGuard, true);
 		}
 		_.#dialogRef?.addEventListener('close', _.#handlers.close);
@@ -486,6 +511,7 @@ class SheetPanel extends HTMLElement {
 			_.#panelRef.removeEventListener('beforeHide', _.#handlers.beforeHide);
 			_.#panelRef.removeEventListener('shown', _.#handlers.shown);
 			_.#panelRef.removeEventListener('hidden', _.#handlers.hidden);
+			_.#panelRef.removeEventListener('pointerdown', _.#handlers.scrimPress, true);
 			_.#panelRef.removeEventListener('click', _.#handlers.outsideGuard, true);
 			_.#panelRef.style.removeProperty('--sheet-progress');
 			_.#panelRef.style.removeProperty('--sheet-backdrop-progress');
@@ -1695,9 +1721,10 @@ class SheetPanel extends HTMLElement {
 		// nothing.
 		void dialog.offsetWidth;
 
+		// An invalid easing token can invalidate the shorthand the same way;
+		// duration is resolved in JS, while easing deliberately remains out of scope.
 		dialog.style.transition = MORPH_TRANSITION_PROPERTIES.map(
-			(property) =>
-				`${property} var(--sheet-morph-duration, 600ms) var(--sheet-morph-easing, ease-out)`
+			(property) => `${property} ${duration}ms var(--sheet-morph-easing, ease-out)`
 		).join(', ');
 		_.#pinBox(dialog, to);
 
@@ -1812,10 +1839,11 @@ class SheetPanel extends HTMLElement {
 	 */
 	#morphDuration(dialog) {
 		const raw = getComputedStyle(dialog).getPropertyValue('--sheet-morph-duration').trim();
-		if (!raw) return 600;
-		const value = Number.parseFloat(raw);
+		const match = raw.match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
+		if (!match) return 600;
+		const value = Number(match[1]);
 		if (!Number.isFinite(value)) return 600;
-		return raw.endsWith('ms') ? value : value * 1000;
+		return match[2].toLowerCase() === 'ms' ? value : value * 1000;
 	}
 }
 

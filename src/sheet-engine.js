@@ -163,6 +163,22 @@ function terminalSeed(preset, distance) {
 // longer turn the same gesture into an 85px launch.
 const SNAP_VELOCITY_LIMIT = terminalSeed(SPRING_PRESETS.snap, TRAVEL);
 
+// The same rule for the third run that takes a release velocity. A dismissal
+// normalises over the runway it has LEFT, so the seed scales as 1/span and a
+// deep drag makes the span small — exactly the short-run explosion the snap cap
+// exists for, reached from the other direction. A 373px centred dialog dragged
+// to a logical 10px has 28px of fade-scale runway left; a 2px/ms flick across it
+// seeds ~131 units into a spring whose own terminal velocity is ~54.
+//
+// Capping is the fix rather than widening exitTravel's floor. The floor is
+// genuinely the extent still showing, and raising it to the resting size would
+// re-introduce the shipped bug its docstring records — a flick understated ~2.8x
+// on a deep drag, every flick-to-close settling at the same speed. Measured, the
+// uncapped seed drove the spring to p = -0.242 and left 17 frames (~283ms) in
+// which the panel was already gone but `hidden` — and with it dialog.close(),
+// focus return and scroll unlock — had not fired.
+const EXIT_VELOCITY_LIMIT = terminalSeed(SPRING_PRESETS.exit, TRAVEL);
+
 /** Bounds PhysicsEngine accepts for both dials, exclusive. */
 const MIN_SPRING = 0.001;
 const MAX_SPRING = 0.999;
@@ -1587,12 +1603,23 @@ class SheetEngine extends EventEmitter {
 		if (_.#parked()) return Promise.resolve(false);
 
 		const targetSize = _.#restSize();
-		// The upper clamp discards logical inward overscroll, which is correct
-		// ONLY because #applyFrame refuses to paint these profiles past flush: the
-		// panel is already sitting at p=1, so starting there matches what is on
-		// screen. Without that clamp this would start the spring somewhere the
-		// panel is not, and the first frame would teleport it.
-		const start = clamp(_.#currentSize / targetSize, 0, 1) * TRAVEL;
+		// Capped, never floored, and the asymmetry is the whole point: this run has
+		// to start where the panel actually IS.
+		//
+		// The cap discards logical inward overscroll, which is correct ONLY because
+		// #applyFrame refuses to paint these profiles past flush — the panel is
+		// already sitting at p=1, so starting there matches what is on screen.
+		//
+		// Below zero there is no such refusal. paintedProgress lets the landed
+		// phases extrapolate under 0 precisely so an inset or centred panel can be
+		// carried off screen 1:1, and #applyLiveOffset rubber-bands a pull past the
+		// closed edge to about -2·√(overpull). A floor here therefore started the
+		// spring somewhere the panel was not: a right sheet resting at 400px and
+		// overpulled to -20px paints translate3d(420px, …), and a floored start
+		// painted 400px on its very first frame — the whole overpull, teleported
+		// away before the spring had moved. settleTo has never clamped its start
+		// and has never had the defect.
+		const start = Math.min(_.#currentSize / targetSize, 1) * TRAVEL;
 		_.#frames = _.#makeDragFrames(targetSize);
 		_.#p = start / TRAVEL;
 		_.#phase = 'returning';
@@ -1644,12 +1671,13 @@ class SheetEngine extends EventEmitter {
 		_.#applyFrame(1);
 		_.#tuneSpring('exit');
 		// The span is what this run actually covers — never the resting size, which
-		// is the distance only a from-rest exit happens to travel.
-		return _.#animate(
-			TRAVEL,
-			0,
-			velocityToSpring(-Math.abs(velocityPxMs), _.#exitTravel(_.#currentSize))
-		);
+		// is the distance only a from-rest exit happens to travel. Capped at what
+		// this spring could have built for itself over the full travel, by the same
+		// terminal-velocity argument SNAP_VELOCITY_LIMIT uses: the span is small on
+		// a deep drag, and the seed scales as 1/span. The run is negative-going, so
+		// the cap is a lower bound.
+		const seed = velocityToSpring(-Math.abs(velocityPxMs), _.#exitTravel(_.#currentSize));
+		return _.#animate(TRAVEL, 0, Math.max(seed, -EXIT_VELOCITY_LIMIT));
 	}
 
 	/**

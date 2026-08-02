@@ -2857,3 +2857,152 @@ test('a profile change mid-entrance retargets the running spring', async (t) => 
 	assert.equal(dialog.style.height, '', 'and never reintroduces it');
 	assert.equal(translateX(dialog), 0, 'the entrance settles flush, with no jump');
 });
+
+test('a return from an overpull past the closed edge starts where the panel is', async (t) => {
+	// The gap the suite could not see. Every other returnToRest case pulls
+	// INWARD (dragBy of a negative offset), which the upper clamp legitimately
+	// discards; none of them left #currentSize below zero, so the floor on the
+	// same expression was never exercised. #applyLiveOffset rubber-bands a pull
+	// past the closed edge to about -2·√(overpull), and paintedProgress paints
+	// the landed phases below 0 faithfully — so a floored start began the spring
+	// somewhere the panel demonstrably was not.
+	//
+	// Asserted COMPARATIVELY, and deliberately so. A single measured constant
+	// would only record whatever the code emits, and "the first frame is still
+	// beyond flush" is not the property either — the rest preset legitimately
+	// covers ~34px in its first frame, so both the fixed and the broken run paint
+	// well inside flush immediately. What the floor actually did was make two
+	// physically different releases IDENTICAL: pulled to exactly closed, and
+	// pulled 20px past it, both started at p=0. The spring is linear, so a start
+	// further out must stay further out for the whole run.
+	const runFrom = async (dragOffset) => {
+		const frames = captureFrames(t);
+		const engine = new SheetEngine();
+		engine.setProfile(profileFor('right'));
+		engine.setSnaps([400], 0);
+		const dialog = makeDialog();
+		const show = engine.show({ to: dialog });
+		drainFrames(frames);
+		await show;
+
+		engine.dragBy(dragOffset);
+		const released = dialog.style.transform;
+		const poses = [];
+		engine.on('change', ({ phase }) => {
+			if (phase === 'returning') poses.push(dialog.style.transform);
+		});
+		const returning = engine.returnToRest(0);
+		drainFrames(frames);
+		await returning;
+		engine.destroy();
+		return { released, poses };
+	};
+
+	const x = (pose) => Number(pose.match(/translate3d\((-?[\d.]+)px/)[1]);
+
+	// 400px = exactly closed. 420px = 20px beyond it, which is what a rubber-
+	// banded overpull produces and what the floor used to discard.
+	const flush = await runFrom(400);
+	const overpulled = await runFrom(420);
+
+	assert.equal(flush.released, 'translate3d(400px, 0px, 0px) scale(1)', 'closed pose');
+	assert.equal(overpulled.released, 'translate3d(420px, 0px, 0px) scale(1)', 'overpulled pose');
+
+	// The bug in one line: these two were the same sequence.
+	assert.notDeepEqual(
+		overpulled.poses,
+		flush.poses,
+		'a 20px overpull must not return along the same path as a flush release'
+	);
+	// Strict on the opening frame, then never behind: both runs land on exactly
+	// 0px, so requiring strictness all the way would only be asserting that
+	// floating-point convergence never quite arrives.
+	assert.ok(
+		x(overpulled.poses[0]) > x(flush.poses[0]),
+		`the deeper release opens further out, got ${x(overpulled.poses[0])} vs ${x(flush.poses[0])}`
+	);
+	const shared = Math.min(overpulled.poses.length, flush.poses.length);
+	assert.ok(
+		Array.from({ length: shared }).every(
+			(_unused, index) => x(overpulled.poses[index]) >= x(flush.poses[index])
+		),
+		'and never falls behind it on any frame the two runs share'
+	);
+
+	// Both still converge on rest, and neither crosses back past flush.
+	for (const { poses } of [flush, overpulled]) {
+		assert.ok(
+			poses.every((pose, index) => index === 0 || x(pose) <= x(poses[index - 1])),
+			'the return is monotonic toward rest'
+		);
+		assert.equal(poses.at(-1), 'translate3d(0px, 0px, 0px) scale(1)');
+	}
+});
+
+test('a dismissal continuing a deep drag cannot outrun the spring receiving it', async (t) => {
+	// The third run that takes a release velocity, and the one that had no cap.
+	// A dismissal normalises over the runway it has LEFT, so the seed scales as
+	// 1/span and a deep drag makes the span tiny — the same short-run explosion
+	// SNAP_VELOCITY_LIMIT exists for, arrived at from the other direction.
+	//
+	// Deliberately NOT fixed by widening exitTravel's floor to the resting size:
+	// that floor is the extent still showing, and raising it would re-introduce
+	// the shipped bug its own docstring records (a flick understated ~2.8x on a
+	// deep drag, every flick-to-close settling identically). The floor is right;
+	// the seed was unbounded.
+	const measure = async (velocity, effect) => {
+		const frames = captureFrames(t);
+		const engine = new SheetEngine();
+		const dialog = makeDialog();
+		engine.setProfile(profileFor('right', { effect, exitEffect: effect }));
+		engine.setSnaps([400], 0);
+		const show = engine.show({ to: dialog });
+		drainFrames(frames);
+		await show;
+
+		engine.dragBy(380); // 400 -> 20px: almost nothing left to travel
+		const progress = [];
+		engine.on('change', ({ progress: value }) => progress.push(value));
+		const hidden = engine.dismiss(velocity);
+		drainFrames(frames);
+		await hidden;
+		engine.destroy();
+
+		const goneAt = progress.findIndex((value) => value <= 0);
+		return {
+			min: Math.min(...progress),
+			visible: goneAt === -1 ? progress.length : goneAt + 1,
+			tail: goneAt === -1 ? 0 : progress.length - goneAt - 1,
+		};
+	};
+
+	for (const effect of ['fade-scale', 'slide']) {
+		const hard = await measure(2, effect);
+
+		// Stated as budgets the exit preset itself justifies rather than as
+		// measured constants. The preset does not overshoot (max p = 1.000), so
+		// it has no business undershooting either; uncapped it reached -0.242.
+		assert.ok(
+			hard.min > -0.05,
+			`${effect}: the exit approaches its hidden frame instead of blowing through it, got ${hard.min}`
+		);
+
+		// The consequence that is actually user-visible. Every frame after the
+		// panel is gone is one where `hidden` — and with it dialog.close(), focus
+		// return and scroll unlock — has still not fired. Uncapped that dead
+		// interval was 17 frames against 9 visible ones: longer gone than leaving.
+		assert.ok(
+			hard.tail < hard.visible,
+			`${effect}: the panel is not gone for longer than it took to leave, got ${hard.tail} vs ${hard.visible}`
+		);
+	}
+
+	// And the cap must not flatten the gesture into one speed. Below it a flick
+	// still reads; above it every release is the same run, exactly as settleTo
+	// and returnToRest already behave.
+	const [still, gentle] = [await measure(0, 'fade-scale'), await measure(1, 'fade-scale')];
+	assert.ok(
+		still.visible > gentle.visible,
+		`a flick still leaves sooner than a standing release, got ${still.visible} vs ${gentle.visible}`
+	);
+});

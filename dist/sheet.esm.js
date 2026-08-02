@@ -392,6 +392,7 @@ function terminalSeed(preset, distance) {
 	return distance * preset.attraction / preset.friction;
 }
 var SNAP_VELOCITY_LIMIT = terminalSeed(SPRING_PRESETS.snap, 100);
+var EXIT_VELOCITY_LIMIT = terminalSeed(SPRING_PRESETS.exit, 100);
 /** Bounds PhysicsEngine accepts for both dials, exclusive. */
 var MIN_SPRING = .001;
 var MAX_SPRING = .999;
@@ -1539,7 +1540,7 @@ var SheetEngine = class extends EventEmitter {
 		if (_.#profile.position === "bottom" || !_.#dialog || _.#state !== "shown") return Promise.resolve(false);
 		if (_.#parked()) return Promise.resolve(false);
 		const targetSize = _.#restSize();
-		const start = clamp(_.#currentSize / targetSize, 0, 1) * 100;
+		const start = Math.min(_.#currentSize / targetSize, 1) * 100;
 		_.#frames = _.#makeDragFrames(targetSize);
 		_.#p = start / 100;
 		_.#phase = "returning";
@@ -1571,7 +1572,8 @@ var SheetEngine = class extends EventEmitter {
 		};
 		_.#applyFrame(1);
 		_.#tuneSpring("exit");
-		return _.#animate(100, 0, velocityToSpring(-Math.abs(velocityPxMs), _.#exitTravel(_.#currentSize)));
+		const seed = velocityToSpring(-Math.abs(velocityPxMs), _.#exitTravel(_.#currentSize));
+		return _.#animate(100, 0, Math.max(seed, -EXIT_VELOCITY_LIMIT));
 	}
 	/**
 	* Stops motion, restores inline styles, and notifies dialog-panel.
@@ -2371,6 +2373,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#dialogRef = null;
 	#gestures = [];
 	#scrollVeto = null;
+	#scrimPress = false;
 	#connected = false;
 	#profile = null;
 	#snaps = [];
@@ -2412,7 +2415,11 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		super();
 		const _ = this;
 		_.#handlers = {
-			beforeShow: () => {
+			beforeShow: (event) => {
+				if (window.innerWidth > _.maxDisplayWidth) {
+					event.preventDefault();
+					return;
+				}
 				_.#proxyRevealed = false;
 				if (_.#engine?.state !== "hiding") _.#setProgress(0);
 				_.#prepareOpen();
@@ -2438,12 +2445,14 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 				event.preventDefault();
 				event.stopPropagation();
 			},
+			scrimPress: (event) => {
+				_.#scrimPress = event.target === _.#dialogRef;
+			},
 			outsideGuard: (event) => {
-				if (_.dismissPolicy.backdrop || !_.#dialogRef) return;
-				const target = event.target;
-				if (_.#dialogRef.contains(target) && target !== _.#dialogRef) return;
+				if (!_.#dialogRef) return;
 				const rect = _.#dialogRef.getBoundingClientRect();
-				if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.stopPropagation();
+				if (!(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) return;
+				if (!_.dismissPolicy.backdrop || !_.#scrimPress) event.stopPropagation();
 			},
 			close: () => {
 				const dialog = _.#dialogRef;
@@ -2515,6 +2524,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#panelRef.addEventListener("beforeHide", _.#handlers.beforeHide);
 			_.#panelRef.addEventListener("shown", _.#handlers.shown);
 			_.#panelRef.addEventListener("hidden", _.#handlers.hidden);
+			_.#panelRef.addEventListener("pointerdown", _.#handlers.scrimPress, true);
 			_.#panelRef.addEventListener("click", _.#handlers.outsideGuard, true);
 		}
 		_.#dialogRef?.addEventListener("close", _.#handlers.close);
@@ -2557,6 +2567,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#panelRef.removeEventListener("beforeHide", _.#handlers.beforeHide);
 			_.#panelRef.removeEventListener("shown", _.#handlers.shown);
 			_.#panelRef.removeEventListener("hidden", _.#handlers.hidden);
+			_.#panelRef.removeEventListener("pointerdown", _.#handlers.scrimPress, true);
 			_.#panelRef.removeEventListener("click", _.#handlers.outsideGuard, true);
 			_.#panelRef.style.removeProperty("--sheet-progress");
 			_.#panelRef.style.removeProperty("--sheet-backdrop-progress");
@@ -3431,7 +3442,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		}
 		_.#pinBox(dialog, from);
 		dialog.offsetWidth;
-		dialog.style.transition = MORPH_TRANSITION_PROPERTIES.map((property) => `${property} var(--sheet-morph-duration, 600ms) var(--sheet-morph-easing, ease-out)`).join(", ");
+		dialog.style.transition = MORPH_TRANSITION_PROPERTIES.map((property) => `${property} ${duration}ms var(--sheet-morph-easing, ease-out)`).join(", ");
 		_.#pinBox(dialog, to);
 		_.#waitForMorph(dialog, duration);
 	}
@@ -3530,11 +3541,11 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	* @returns {number} Duration in milliseconds.
 	*/
 	#morphDuration(dialog) {
-		const raw = getComputedStyle(dialog).getPropertyValue("--sheet-morph-duration").trim();
-		if (!raw) return 600;
-		const value = Number.parseFloat(raw);
+		const match = getComputedStyle(dialog).getPropertyValue("--sheet-morph-duration").trim().match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
+		if (!match) return 600;
+		const value = Number(match[1]);
 		if (!Number.isFinite(value)) return 600;
-		return raw.endsWith("ms") ? value : value * 1e3;
+		return match[2].toLowerCase() === "ms" ? value : value * 1e3;
 	}
 };
 var SheetHeader = class extends HTMLElement {};
