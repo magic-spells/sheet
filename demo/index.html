@@ -789,15 +789,19 @@
 				grid-column: auto;
 			}
 
+			/* The group heading is the one label in the lab that names a CONCEPT
+			   rather than an attribute value, so it drops the mono/uppercase
+			   treatment the value chips and legends keep. At this size the wide
+			   tracking that made small caps legible only pulls the words apart,
+			   so it eases off too. */
 			.lab-group-title {
 				display: block;
 				margin-bottom: 0.9rem;
 				color: var(--cream);
-				font-family: var(--font-mono);
-				font-size: 0.78rem;
-				font-weight: 700;
-				letter-spacing: 0.24em;
-				text-transform: uppercase;
+				font-family: var(--font-body);
+				font-size: 1.15rem;
+				font-weight: 600;
+				letter-spacing: 0.01em;
 			}
 
 			.lab-hint {
@@ -1864,15 +1868,16 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 					Four positions, two geometries and four effects make thirty-two profiles of one panel —
 					and the mobile and desktop halves are dialled separately, split at the real 768px
 					breakpoint. Every setting is a plain attribute or CSS token, no config object. Leave a
-					desktop dial on <em>default</em> and it falls back the documented way: position inherits
-					the mobile one — except a <code>bottom</code>, which becomes a centred dialog — mode
-					becomes a floating card, and the effects follow their chains. The snap switches are a
-					mobile dial: past the breakpoint the panel drops to one resting size, and a desktop
-					<code>bottom</code> takes that size from its own content, just like a centre. Set the
-					dials, then open: the snippet below is re-read from the element itself, so it always shows
-					the real DOM. Resize across the breakpoint with the panel open and it morphs between your
-					two configurations in place. The spring dials govern entrances only; exits and snaps keep
-					their presets.
+					desktop dial on <em>inherit</em> and it falls back the documented way: position takes the
+					mobile one — except a <code>bottom</code>, which becomes a centred dialog — and the
+					effects follow their chains. Mode is the one that inherits nothing, which is why its
+					switch reads <em>card (default)</em> instead: on a wide viewport the sheet floats as a
+					card whatever <code>mode</code> says. The snap switches are a mobile dial: past the
+					breakpoint the panel drops to one resting size, and a desktop <code>bottom</code> takes
+					that size from its own content, just like a centre. Set the dials, then open: the snippet
+					below is re-read from the element itself, so it always shows the real DOM. Resize across
+					the breakpoint with the panel open and it morphs between your two configurations in place.
+					The spring dials govern entrances only; exits and snaps keep their presets.
 				</p>
 
 				<div class="lab-grid">
@@ -1882,9 +1887,14 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 					     The desktop columns' empty value removes the attribute, so the
 					     component's documented fallbacks apply: position inherits the
 					     mobile one — except a bottom, which falls out to center — the
-					     effects fall back down their chains, and desktop-mode inherits
-					     nothing at all, which is why that column names its default on
-					     the button instead of carrying a separate "default" switch. -->
+					     effects fall back down their chains. Those switches are labelled
+					     "inherit" rather than "default" because that is what the empty
+					     value does — and because on a bottom sheet, inherit and center
+					     resolve to the SAME profile, so calling it "default" made the two
+					     look redundant when they only coincide for that one position.
+					     desktop-mode is the exception in both respects: it inherits
+					     nothing at all, so its switch names the true default on the
+					     button instead. -->
 					<div class="lab-group">
 						<span class="lab-group-title" id="lab-title-position">Position</span>
 						<div class="lab-cols">
@@ -1940,7 +1950,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										aria-pressed="true"
 										data-lab-group="desktop-position"
 										data-lab-value="">
-										default
+										inherit
 									</button>
 									<button
 										class="seg-btn"
@@ -2092,7 +2102,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										aria-pressed="true"
 										data-lab-group="desktop-effect"
 										data-lab-value="">
-										default
+										inherit
 									</button>
 									<button
 										class="seg-btn"
@@ -2124,8 +2134,12 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 					</div>
 
 					<!-- Leaving is a separate question from arriving, so it gets its own
-					     group. "inherit" removes the attribute rather than setting a value,
-					     which is how the sheet goes back to leaving the way it arrived. -->
+					     group. Both empty-value switches remove the attribute rather than
+					     setting one, but they fall back along DIFFERENT axes, so they must
+					     not share a word: the mobile one takes the ENTRANCE effect
+					     (exit-effect -> effect), while every desktop switch in this lab
+					     takes its mobile twin. Hence "match entrance" here and "inherit"
+					     there. -->
 					<div class="lab-group">
 						<span class="lab-group-title" id="lab-title-exit">Exit effect</span>
 						<div class="lab-cols">
@@ -2138,7 +2152,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										aria-pressed="true"
 										data-lab-group="exit-effect"
 										data-lab-value="">
-										inherit
+										match entrance
 									</button>
 									<button
 										class="seg-btn"
@@ -2178,7 +2192,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										aria-pressed="true"
 										data-lab-group="desktop-exit-effect"
 										data-lab-value="">
-										default
+										inherit
 									</button>
 									<button
 										class="seg-btn"

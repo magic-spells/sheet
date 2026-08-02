@@ -366,8 +366,8 @@ var SPRING_PRESETS = {
 		friction: .28
 	},
 	morphBack: {
-		attraction: .28,
-		friction: .5
+		attraction: .08,
+		friction: .34
 	}
 };
 /**
