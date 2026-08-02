@@ -1,5 +1,6 @@
 import PhysicsEngine from "@magic-spells/physics-engine";
 import FrameEngine from "@magic-spells/frame-engine";
+import { MorphEngine } from "@magic-spells/morph-engine";
 //#region src/drag-gesture.js
 /**
 * Rolling velocity sampler measured in pixels per millisecond.
@@ -300,6 +301,37 @@ var EFFECT_BLUR = {
 *   snap        566ms   200ms   1.024  — the only phase allowed to breathe
 *   rest        333ms   167ms   1.000
 *
+* `morph` and `morphBack` tune the trigger BLOB rather than this engine's own
+* spring — a `morph-trigger` panel is flown by MorphEngine, so neither is ever
+* handed to `#spring`:
+*
+*              settle   t90    max progress
+*   morph       583ms   133ms   1.118  — growing out of the trigger, deliberately loose
+*   morphBack   317ms   150ms   1.000  — returning to it, no bounce at all
+*
+* Both used to be one inherited number. Saying nothing in MorphEngine's
+* constructor took its default of 0.1 / 0.32, which put an 5.9% overshoot on BOTH
+* directions — more breath than any preset above, applied by accident rather than
+* chosen, and applied just as much to the return as to the arrival.
+*
+* They are split because the two directions want opposite things. Growing out of
+* a trigger is the one motion in this package with somewhere to put a bounce: the
+* panel is arriving, nothing is waiting on it, and the overshoot reads as the
+* thing springing open. Going back is a dismissal — the user is done, and a
+* wobble on the way out reads as the UI dawdling. So `morph` roughly doubles the
+* breath it had (5.9% -> 11.8%, and a second crossing, so it reads as a bounce
+* rather than a single settle) while `morphBack` removes it entirely and lands
+* brisker than it arrives, which is the same rule `exit` follows against
+* `entrance` above.
+*
+* The t90s are near-identical (133 / 150ms), so this is a change of character,
+* not of pace: the return is not sluggish, it just does not overshoot.
+*
+* Settle figures come from the suite's integrator simulation, which models THIS
+* engine's early-settle detector; MorphEngine's own settle test may differ by a
+* frame or two. Overshoot and t90 are properties of the shared integrator and
+* transfer exactly.
+*
 * `snap` is deliberately the loose one, matching bottom-sheet. A flick has to
 * have somewhere to GO: with a tightly damped snap the release velocity is
 * absorbed within a frame and every settle looks the same however hard it was
@@ -328,6 +360,14 @@ var SPRING_PRESETS = {
 	rest: {
 		attraction: .15,
 		friction: .455
+	},
+	morph: {
+		attraction: .07,
+		friction: .28
+	},
+	morphBack: {
+		attraction: .08,
+		friction: .34
 	}
 };
 /**
@@ -1062,15 +1102,24 @@ var SheetEngine = class extends EventEmitter {
 	#flightBackdrop = 0;
 	#springOverride = null;
 	#morphing = false;
+	#blobEngine = null;
+	#morphTrigger = null;
+	#blobTo = null;
+	#gestureExit = false;
+	#triggerProbe;
 	/**
 	* @param {Object} [options] - Spring tuning. Each run retunes the spring
 	*   from SPRING_PRESETS, so these only seed the initial values.
 	* @param {number} [options.attraction=0.07] - Spring attraction.
 	* @param {number} [options.friction=0.52] - Spring friction.
+	* @param {Function} [options.triggerProbe] - Returns whether an armed trigger
+	*   is still a usable reverse destination. The component supplies the DOM
+	*   geometry policy; the engine remains usable in DOM-free tests.
 	*/
-	constructor({ attraction = SPRING_PRESETS.entrance.attraction, friction = SPRING_PRESETS.entrance.friction } = {}) {
+	constructor({ attraction = SPRING_PRESETS.entrance.attraction, friction = SPRING_PRESETS.entrance.friction, triggerProbe = (trigger) => !!trigger } = {}) {
 		super();
 		const _ = this;
+		_.#triggerProbe = triggerProbe;
 		_.#spring = new PhysicsEngine({
 			attraction,
 			friction
@@ -1079,14 +1128,20 @@ var SheetEngine = class extends EventEmitter {
 		_.#spring.on("complete", () => _.#settle());
 	}
 	/**
-	* Declares this a direct engine: it animates the real dialog, visible for
-	* the whole flight. dialog-panel therefore promotes it into the top layer at
-	* show-start (the p=0 frame is painted hidden) and demotes only after the
-	* hidden settle — never on a frame anything visible could repaint.
-	* @returns {boolean} Always true.
+	* Declares which transport owns the next run.
+	*
+	* dialog-panel reads this at the top of show()/hide(), before beforeShow or
+	* beforeHide can change anything. An armed, still-usable trigger therefore
+	* selects the proxy blob; a swipe or a vanished trigger selects the direct
+	* spring while there is still time for dialog-panel to choose the matching
+	* promotion/demotion choreography. Reading this getter never mutates the run.
+	* @returns {boolean} True when the sheet spring animates the real dialog.
 	*/
 	get animatesDialog() {
-		return true;
+		const _ = this;
+		if (_.#gestureExit) return true;
+		if (!_.#morphTrigger) return true;
+		return !_.#triggerProbe(_.#morphTrigger);
 	}
 	/** @returns {'hidden'|'showing'|'shown'|'hiding'} Current transport state. */
 	get state() {
@@ -1149,7 +1204,7 @@ var SheetEngine = class extends EventEmitter {
 	*/
 	#clearManagedSize() {
 		const _ = this;
-		if (!_.#dialog || _.#morphing) return;
+		if (!_.#dialog || _.#parked()) return;
 		_.#dialog.style.width = "";
 		_.#dialog.style.height = "";
 	}
@@ -1165,7 +1220,7 @@ var SheetEngine = class extends EventEmitter {
 	*/
 	#rebuildOpenTrack() {
 		const _ = this;
-		if (!_.#dialog || _.#morphing) return;
+		if (!_.#dialog || _.#parked()) return;
 		if (_.#state !== "shown" && _.#state !== "showing") return;
 		if (_.#state === "shown") _.#p = 1;
 		_.#frames = _.#makeOpenFrames(_.#currentSize);
@@ -1174,6 +1229,40 @@ var SheetEngine = class extends EventEmitter {
 	/** @returns {boolean} True while a host-driven profile morph owns the dialog. */
 	get morphing() {
 		return this.#morphing;
+	}
+	/** @returns {boolean} True while the inner blob is actively flying. */
+	get blobFlight() {
+		const state = this.#blobEngine?.state;
+		return state === "showing" || state === "hiding";
+	}
+	/**
+	* Arms a trigger morph for the next hidden-to-showing run.
+	*
+	* The hidden-state guard is the classification boundary: a show that rescues
+	* a live spring exit cannot accidentally acquire a trigger halfway through
+	* and later reverse into a source it never came from. Clearing the gesture
+	* flag even on refusal is what lets that rescued spring show classify itself
+	* as direct when dialog-panel reads animatesDialog immediately afterwards.
+	* @param {HTMLElement} trigger - Trigger to morph from and back into.
+	* @param {Object} [options] - Blob presentation options.
+	* @param {number} [options.zIndex=1002] - Blob stacking level.
+	* @returns {boolean} True when the morph was armed.
+	*/
+	armMorph(trigger, { zIndex = 1002 } = {}) {
+		const _ = this;
+		_.#gestureExit = false;
+		if (_.#state !== "hidden") return false;
+		_.#morphTrigger = trigger;
+		_.#ensureBlobEngine(zIndex);
+		return true;
+	}
+	/** Selects the direct spring exit for the next gesture-driven hide. */
+	armGestureExit() {
+		this.#gestureExit = true;
+	}
+	/** Cancels a gesture exit classification after beforeHide is vetoed. */
+	cancelGestureExit() {
+		this.#gestureExit = false;
 	}
 	/**
 	* Parks the engine so the host can morph the dialog between two profile
@@ -1196,7 +1285,7 @@ var SheetEngine = class extends EventEmitter {
 	*/
 	beginMorph() {
 		const _ = this;
-		if (_.#state !== "shown" || _.#morphing || !_.#dialog) return false;
+		if (_.#state !== "shown" || _.#parked() || !_.#dialog) return false;
 		_.#landPendingSettle();
 		if (_.#spring.isAnimating) _.#spring.stop();
 		_.#currentSize = _.#restSize();
@@ -1218,7 +1307,7 @@ var SheetEngine = class extends EventEmitter {
 	*/
 	endMorph() {
 		const _ = this;
-		if (!_.#morphing) return;
+		if (!_.#morphing || _.blobFlight) return;
 		_.#morphing = false;
 		_.#phase = _.#state === "shown" ? "shown" : _.#phase;
 		_.#currentSize = _.#restSize();
@@ -1260,6 +1349,35 @@ var SheetEngine = class extends EventEmitter {
 		_.#dialog = to;
 		_.#display = display || "flex";
 		_.#saveInline();
+		if (_.#morphTrigger && _.#blobEngine) {
+			if (_.#state === "hiding") {
+				_.emit("reveal", {
+					from: _.#morphTrigger,
+					to: _.#dialog
+				});
+				_.#state = "showing";
+				_.#phase = "showing";
+				_.#tuneBlob("morph");
+				return _.#blobEngine.show({
+					from: _.#morphTrigger,
+					to,
+					display: _.#display
+				});
+			}
+			if (_.#state === "hidden") {
+				_.#state = "showing";
+				_.#phase = "showing";
+				_.#p = 0;
+				_.#backdropProgress = 0;
+				_.#blobTo = "dialog";
+				_.#tuneBlob("morph");
+				return _.#blobEngine.show({
+					from: _.#morphTrigger,
+					to: _.#dialog,
+					display: _.#display
+				});
+			}
+		}
 		_.#prepareDialog();
 		if (_.#state === "hiding") {
 			const floorP = paintedProgress(_.#profile.position, _.#p, _.#phase);
@@ -1303,6 +1421,15 @@ var SheetEngine = class extends EventEmitter {
 		if (_.#state === "hidden" || _.#state === "hiding") return Promise.resolve(false);
 		const velocity = _.#pendingDismissVelocity;
 		_.#pendingDismissVelocity = 0;
+		if (_.#morphTrigger && _.#blobEngine && !_.#gestureExit && _.#triggerProbe(_.#morphTrigger)) {
+			if (_.#state === "shown") _.#blobTo = "trigger";
+			_.#state = "hiding";
+			_.#phase = "hiding";
+			_.#tuneBlob("morphBack");
+			return _.#blobEngine.hide();
+		}
+		if (_.#blobTo !== null || _.#morphTrigger) _.#releaseBlob();
+		_.#gestureExit = false;
 		if (_.#state === "showing") {
 			const paintedP = paintedProgress(_.#profile.position, _.#p, _.#phase);
 			const painted = _.#frames?.getFrame(paintedP);
@@ -1340,7 +1467,7 @@ var SheetEngine = class extends EventEmitter {
 	*/
 	dragBy(offsetPx) {
 		const _ = this;
-		if (!_.#dialog || _.#state !== "shown" || _.#morphing) return;
+		if (!_.#dialog || _.#state !== "shown" || _.#parked()) return;
 		if (_.#spring.isAnimating) _.#spring.stop();
 		const activeSize = _.#snaps[_.#activeSnap];
 		_.#currentSize = activeSize - offsetPx;
@@ -1359,7 +1486,7 @@ var SheetEngine = class extends EventEmitter {
 	settleTo(snapIndex, velocityPxMs = 0) {
 		const _ = this;
 		if (_.#profile.position !== "bottom" || !_.#dialog || _.#state !== "shown") return Promise.resolve(false);
-		if (_.#morphing) return Promise.resolve(false);
+		if (_.#parked()) return Promise.resolve(false);
 		const to = clamp(Math.trunc(snapIndex), 0, _.#snaps.length - 1);
 		const from = _.#activeSnap;
 		const targetSize = _.#snaps[to];
@@ -1390,7 +1517,7 @@ var SheetEngine = class extends EventEmitter {
 	returnToRest(velocityPxMs = 0) {
 		const _ = this;
 		if (_.#profile.position === "bottom" || !_.#dialog || _.#state !== "shown") return Promise.resolve(false);
-		if (_.#morphing) return Promise.resolve(false);
+		if (_.#parked()) return Promise.resolve(false);
 		const targetSize = _.#restSize();
 		const start = clamp(_.#currentSize / targetSize, 0, 1) * 100;
 		_.#frames = _.#makeDragFrames(targetSize);
@@ -1431,6 +1558,10 @@ var SheetEngine = class extends EventEmitter {
 	*/
 	stop() {
 		const _ = this;
+		if (_.#blobEngine && _.#blobEngine.state !== "idle") _.#blobEngine.stop();
+		_.#blobTo = null;
+		_.#morphTrigger = null;
+		_.#gestureExit = false;
 		if (_.#state === "hidden") return;
 		if (_.#spring.isAnimating) _.#spring.stop();
 		_.#state = "hidden";
@@ -1448,6 +1579,8 @@ var SheetEngine = class extends EventEmitter {
 	destroy() {
 		const _ = this;
 		_.stop();
+		_.#blobEngine?.destroy();
+		_.#blobEngine = null;
 		_.#spring.removeAllListeners();
 		_.removeAllListeners();
 	}
@@ -1627,8 +1760,15 @@ var SheetEngine = class extends EventEmitter {
 	/**
 	* Resolves the tuning for a phase, honouring any instance override.
 	*
-	* The override governs how the sheet ARRIVES. Exits and snaps keep their
-	* presets.
+	* The override governs how the sheet ARRIVES — by whichever engine is flying
+	* that arrival. `entrance` is this engine's own spring; `morph` is the trigger
+	* blob that REPLACES it when `morph-trigger` is set. Answering only for
+	* `entrance` was the gap: a `morph-trigger` panel is never flown by `#spring`
+	* at all, so `spring=` resolved correctly and then tuned a spring that painted
+	* no frame of the entrance the user could see.
+	*
+	* Exits and snaps keep their presets, and `morphBack` is an exit — it returns
+	* the panel to the trigger, so it is pinned for the same reason `exit` is.
 	*
 	* Scaling those phases proportionally was tried and abandoned: the exit
 	* preset's attraction is ~5.5x the entrance's, so any brisk override pushed
@@ -1636,7 +1776,7 @@ var SheetEngine = class extends EventEmitter {
 	* spring — `spring="0.3 0.55"` measured a 2933ms exit. The dials are bounded,
 	* so no proportional rule can survive a fast entrance. Pinning exits to
 	* their presets keeps leaving brisk for every override instead.
-	* @param {'entrance'|'exit'|'snap'|'rest'} kind - Motion phase.
+	* @param {'entrance'|'exit'|'snap'|'rest'|'morph'|'morphBack'} kind - Motion phase.
 	* @returns {{attraction: number, friction: number}} Spring tuning.
 	*/
 	#springFor(kind) {
@@ -1644,7 +1784,7 @@ var SheetEngine = class extends EventEmitter {
 		const preset = SPRING_PRESETS[kind] || SPRING_PRESETS.entrance;
 		const override = _.#springOverride;
 		if (!override) return preset;
-		if (kind !== "entrance") return preset;
+		if (kind !== "entrance" && kind !== "morph") return preset;
 		return {
 			attraction: clamp(override.attraction, MIN_SPRING, MAX_SPRING),
 			friction: clamp(override.friction, MIN_SPRING, MAX_SPRING)
@@ -1659,6 +1799,23 @@ var SheetEngine = class extends EventEmitter {
 		const preset = _.#springFor(kind);
 		_.#spring.setAttraction(preset.attraction);
 		_.#spring.setFriction(preset.friction);
+	}
+	/**
+	* Retunes the trigger blob for its next run.
+	*
+	* The blob outlives a single flight — one MorphEngine is reused for every
+	* open and close of this panel — so its tuning has to be written at each run
+	* boundary rather than only at construction. That is also what lets the
+	* outbound run differ from the inbound one at all: MorphEngine takes both
+	* dials live, so the two directions are one retune apart.
+	* @param {'morph'|'morphBack'} kind - Blob run direction.
+	*/
+	#tuneBlob(kind) {
+		const _ = this;
+		if (!_.#blobEngine) return;
+		const preset = _.#springFor(kind);
+		_.#blobEngine.setAttraction(preset.attraction);
+		_.#blobEngine.setFriction(preset.friction);
 	}
 	/**
 	* Recomputes backdrop opacity from the panel's live position.
@@ -1745,7 +1902,7 @@ var SheetEngine = class extends EventEmitter {
 	}
 	#applyFrame(p) {
 		const _ = this;
-		if (_.#morphing) return;
+		if (_.#parked()) return;
 		_.#syncBackdropProgress(p);
 		if (!_.#frames || !_.#dialog) return;
 		const styles = _.#frames.getFrame(paintedProgress(_.#profile.position, p, _.#phase));
@@ -1762,11 +1919,81 @@ var SheetEngine = class extends EventEmitter {
 		const _ = this;
 		if (!_.#dialog) return;
 		_.#dialog.style.display = _.#display;
+		_.#prepareDialogMotion();
+	}
+	#prepareDialogMotion() {
+		const _ = this;
+		if (!_.#dialog) return;
 		const hints = ["transform", "opacity"];
 		if (resizesWithSnaps(_.#profile)) hints.push("height");
 		const blurs = (effect) => (EFFECT_BLUR[effect] ?? 0) > 0;
 		if (blurs(_.#profile.effect) || blurs(_.#profile.exitEffect || _.#profile.effect)) hints.push("filter");
 		_.#dialog.style.willChange = hints.join(", ");
+	}
+	#parked() {
+		return this.#morphing || this.#blobTo !== null;
+	}
+	#ensureBlobEngine(zIndex) {
+		const _ = this;
+		if (_.#blobEngine) {
+			_.#blobEngine.zIndex = zIndex;
+			return;
+		}
+		_.#blobEngine = new MorphEngine({
+			..._.#springFor("morph"),
+			zIndex,
+			lockScroll: false
+		});
+		_.#blobEngine.on("change", ({ progress }) => {
+			const openness = _.#blobTo === "dialog" ? progress : 1 - progress;
+			_.#p = openness;
+			_.#backdropProgress = clamp(openness, 0, 1);
+			_.emit("change", {
+				progress: openness,
+				backdropProgress: _.#backdropProgress,
+				phase: _.#phase
+			});
+		});
+		_.#blobEngine.on("reveal", (detail) => _.emit("reveal", detail));
+		_.#blobEngine.on("shown", () => _.#finishBlobShown());
+		_.#blobEngine.on("hidden", () => _.#finishBlobHidden());
+	}
+	#releaseBlob() {
+		const _ = this;
+		if (_.#blobEngine && _.#blobEngine.state !== "idle") _.#blobEngine.stop();
+		_.#blobTo = null;
+		_.#morphTrigger = null;
+		_.#applyFrame(_.#p);
+	}
+	#finishBlobShown() {
+		const _ = this;
+		if (_.#state !== "showing") return;
+		_.#state = "shown";
+		_.#phase = "shown";
+		_.#p = 1;
+		_.#backdropProgress = 1;
+		_.#currentSize = _.#restSize();
+		_.#frames = _.#makeOpenFrames(_.#currentSize);
+		_.#blobTo = null;
+		_.#prepareDialogMotion();
+		_.#applyFrame(1);
+		_.#emitChange();
+		_.emit("shown");
+		_.#dialog.style.display = _.#savedInline?.display || "";
+	}
+	#finishBlobHidden() {
+		const _ = this;
+		_.#state = "hidden";
+		_.#phase = "hidden";
+		_.#p = 0;
+		_.#backdropProgress = 0;
+		_.#flightPhase = null;
+		_.#blobTo = null;
+		_.#morphTrigger = null;
+		_.#gestureExit = false;
+		_.#emitChange();
+		_.#restoreInline();
+		_.emit("hidden");
 	}
 	#restoreInline() {
 		const _ = this;
@@ -2109,6 +2336,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#snaps = [];
 	#drag = { active: false };
 	#morph = null;
+	#pendingProfile = null;
 	#contentObserver = null;
 	#contentRemeasureTimer = null;
 	#handlers;
@@ -2148,10 +2376,10 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			},
 			beforeHide: () => {
 				_.#drag = { active: false };
-				_.#finishMorph();
 			},
 			shown: () => {
 				_.#setProgress(1);
+				_.#flushPendingProfile();
 				_.#syncContentObserver();
 			},
 			hidden: () => {
@@ -2199,10 +2427,18 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			return;
 		}
 		if (PROFILE_ATTRIBUTES.has(name) && _.panel?.isOpen) {
+			if (_.#engine?.blobFlight) {
+				_.#pendingProfile = true;
+				return;
+			}
 			_.#morphToProfile();
 			return;
 		}
 		if (name === "snap-points" || name === "initial-snap") {
+			if (_.#engine?.blobFlight) {
+				_.#pendingProfile = true;
+				return;
+			}
 			if (!_.#drag.active) _.#prepareOpen();
 		}
 	}
@@ -2212,7 +2448,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#connected = true;
 		_.#panelRef = _.panel;
 		_.#dialogRef = _.dialog;
-		_.#engine = new SheetEngine();
+		_.#engine = new SheetEngine({ triggerProbe: (trigger) => !!_.#usableTriggerBox(trigger) });
 		_.#engine.on("snapchange", _.#handlers.snapchange);
 		_.#engine.on("change", _.#handlers.change);
 		_.#syncSpring();
@@ -2277,19 +2513,26 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#dialogRef = null;
 		_.#profile = null;
 		_.#drag = { active: false };
+		_.#pendingProfile = null;
 		_.removeAttribute("engine");
 	}
 	/**
 	* Opens through dialog-panel. The engine declares `animatesDialog`, so the
-	* panel selects its engine transport with or without a trigger — the
-	* trigger is passed through purely for focus return.
-	* @param {HTMLElement} [triggerEl] - Trigger used for focus return.
+	* panel selects its engine transport with or without a trigger.
+	*
+	* The trigger is used for focus return and — only when `morph-trigger` is
+	* set — as the box the panel grows out of. Without that attribute the
+	* entrance is the ordinary spring, exactly as it is for a bare `show()`.
+	* @param {HTMLElement} [triggerEl] - Trigger for focus return, and the morph
+	*   source when `morph-trigger` is set.
 	* @returns {boolean|undefined} dialog-panel's show result.
 	*/
 	show(triggerEl) {
 		const _ = this;
 		if (window.innerWidth > _.maxDisplayWidth) return false;
 		_.#prepareOpen();
+		const dialog = _.#dialogRef;
+		if (_.morphsFromTrigger && !!triggerEl && !!dialog && _.#morphDuration(dialog) > 0 && !!_.#usableTriggerBox(triggerEl)) _.#engine?.armMorph(triggerEl, { zIndex: _.#blobZIndex() });
 		return _.panel?.show(triggerEl);
 	}
 	/**
@@ -2517,6 +2760,15 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	get dismiss() {
 		return this.getAttribute("dismiss");
 	}
+	/**
+	* Whether `show(trigger)` grows the trigger's box into the panel rather than
+	* running the spring entrance. Opt-in, because a trigger is passed to every
+	* sheet for focus return and most of them should still slide from their edge.
+	* @returns {boolean} True when the `morph-trigger` attribute is present.
+	*/
+	get morphsFromTrigger() {
+		return this.hasAttribute("morph-trigger");
+	}
 	/** @returns {number} Largest viewport width where opening is allowed. */
 	get maxDisplayWidth() {
 		const value = this.getAttribute("max-display-width");
@@ -2544,7 +2796,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#dragStart(surface, event) {
 		const _ = this;
 		if (surface === "panel" && event?.target !== _) return false;
-		if (_.#engine?.state !== "shown" || _.#engine.morphing) {
+		if (_.#engine?.state !== "shown" || _.#engine.morphing || _.#engine.blobFlight) {
 			_.#drag = { active: false };
 			return false;
 		}
@@ -2674,7 +2926,9 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#dismiss(velocityAway) {
 		const _ = this;
 		_.#engine.setDismissVelocity(Math.max(0, velocityAway));
+		_.#engine.armGestureExit();
 		if (_.panel?.hide() === false) {
+			_.#engine.cancelGestureExit();
 			_.#engine.setDismissVelocity(0);
 			_.#settleBack();
 		}
@@ -2724,6 +2978,18 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		}
 		_.#syncActiveSize(_.#engine.activeSnap);
 		_.#syncContentObserver();
+	}
+	#flushPendingProfile() {
+		const _ = this;
+		if (!_.#pendingProfile) return;
+		_.#pendingProfile = null;
+		const next = _.#resolveProfile();
+		if (_.#profile && _.#profileKey(next) !== _.#profileKey(_.#profile)) {
+			_.#morphToProfile();
+			return;
+		}
+		_.#applyProfile(next);
+		_.#prepareOpen();
 	}
 	/**
 	* Keeps a ResizeObserver on the dialog only while an open CONTENT-SIZED
@@ -2994,6 +3260,11 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			return;
 		}
 		const next = _.#resolveProfile();
+		if (_.#engine?.blobFlight) {
+			_.#pendingProfile = true;
+			return;
+		}
+		if (_.#engine?.state === "hiding") return;
 		if (_.#profile && _.#profileKey(next) !== _.#profileKey(_.#profile) && _.panel?.isOpen) {
 			_.#morphToProfile();
 			return;
@@ -3005,6 +3276,30 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		}
 		_.#applyProfile(next);
 		_.#prepareOpen();
+	}
+	#usableTriggerBox(trigger) {
+		if (!(trigger instanceof Element) || !trigger.isConnected) return null;
+		const box = this.#readBox(trigger);
+		if (box.width <= 0 || box.height <= 0) return null;
+		if (box.left >= window.innerWidth || box.top >= window.innerHeight || box.left + box.width <= 0 || box.top + box.height <= 0) return null;
+		return box;
+	}
+	#blobZIndex() {
+		const raw = getComputedStyle(this.#dialogRef || this).getPropertyValue("--sheet-blob-z-index").trim();
+		const value = Number.parseFloat(raw);
+		return Number.isFinite(value) ? value : 1002;
+	}
+	#waitForMorph(dialog, duration) {
+		const _ = this;
+		const settle = () => _.#finishMorph();
+		_.#morph = {
+			dialog,
+			onEnd: (event) => {
+				if (event.target === dialog && MORPH_TRANSITION_PROPERTIES.includes(event.propertyName)) settle();
+			},
+			timer: setTimeout(settle, duration + MORPH_TIMEOUT_PADDING_MS)
+		};
+		dialog.addEventListener("transitionend", _.#morph.onEnd);
 	}
 	/**
 	* Morphs an open panel between two profile geometries.
@@ -3031,6 +3326,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#morphToProfile() {
 		const _ = this;
 		const dialog = _.#dialogRef;
+		if (_.#engine?.state === "hiding") return;
 		if (!dialog || !_.#engine) {
 			_.#prepareOpen();
 			return;
@@ -3055,27 +3351,19 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		dialog.offsetWidth;
 		dialog.style.transition = MORPH_TRANSITION_PROPERTIES.map((property) => `${property} var(--sheet-morph-duration, 600ms) var(--sheet-morph-easing, ease-out)`).join(", ");
 		_.#pinBox(dialog, to);
-		const settle = () => _.#finishMorph();
-		_.#morph = {
-			dialog,
-			onEnd: (event) => {
-				if (event.target === dialog && MORPH_TRANSITION_PROPERTIES.includes(event.propertyName)) settle();
-			},
-			timer: setTimeout(settle, duration + MORPH_TIMEOUT_PADDING_MS)
-		};
-		dialog.addEventListener("transitionend", _.#morph.onEnd);
+		_.#waitForMorph(dialog, duration);
 	}
 	/**
 	* Strips the morph scaffolding and hands the panel back to the engine.
 	*
-	* Safe to call at any point, including from `beforeHide` when a morph is
-	* still in flight — every exit route has to be able to abandon one.
+	* Safe to call at any point: the timeout and transition listener are always
+	* removed before the engine resumes painting.
 	*/
 	#finishMorph() {
 		const _ = this;
-		if (!_.#engine?.morphing) return;
 		_.#clearMorphTimers();
 		if (_.#dialogRef) _.#stripMorphPins(_.#dialogRef);
+		if (!_.#engine?.morphing) return;
 		_.#engine?.endMorph();
 		_.#setProgress(1, 1);
 	}
@@ -3086,14 +3374,14 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#morph.dialog.removeEventListener("transitionend", _.#morph.onEnd);
 		_.#morph = null;
 	}
-	#readBox(dialog) {
-		const rect = dialog.getBoundingClientRect();
+	#readBox(element) {
+		const rect = element.getBoundingClientRect();
 		return {
 			top: rect.top,
 			left: rect.left,
 			width: rect.width,
 			height: rect.height,
-			borderRadius: getComputedStyle(dialog).borderRadius
+			borderRadius: getComputedStyle(element).borderRadius
 		};
 	}
 	/**

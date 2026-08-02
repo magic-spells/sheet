@@ -152,6 +152,7 @@ class SheetPanel extends HTMLElement {
 	#snaps = [];
 	#drag = { active: false };
 	#morph = null;
+	#pendingProfile = null;
 	#contentObserver = null;
 	#contentRemeasureTimer = null;
 	#handlers;
@@ -199,13 +200,10 @@ class SheetPanel extends HTMLElement {
 				// Covers every route out: gesture dismissal, close button,
 				// Escape, backdrop click, or a programmatic hide().
 				_.#drag = { active: false };
-				// A morph still in flight has to be abandoned here too, or its
-				// pinned box would outlive the panel and fight the exit animation
-				// the engine is about to run.
-				_.#finishMorph();
 			},
 			shown: () => {
 				_.#setProgress(1);
+				_.#flushPendingProfile();
 				// The only moment the observer can be armed. #prepareOpen runs from
 				// beforeShow and from show(), and dialog-panel is still 'hidden' at
 				// both — so the isOpen gate in #syncContentObserver refused every
@@ -284,6 +282,10 @@ class SheetPanel extends HTMLElement {
 		}
 
 		if (PROFILE_ATTRIBUTES.has(name) && _.panel?.isOpen) {
+			if (_.#engine?.blobFlight) {
+				_.#pendingProfile = true;
+				return;
+			}
 			// Same treatment as a breakpoint crossing: retarget the open panel
 			// rather than closing it. This is what lets a consumer flip
 			// position/mode live and watch the sheet travel to its new geometry.
@@ -292,6 +294,10 @@ class SheetPanel extends HTMLElement {
 		}
 
 		if (name === 'snap-points' || name === 'initial-snap') {
+			if (_.#engine?.blobFlight) {
+				_.#pendingProfile = true;
+				return;
+			}
 			// Same refusal the resize path makes, and for the same reason: setSnaps
 			// rewrites #currentSize to the active snap, which discards a live
 			// gesture's pose. #dragMove measures displacement continuously from
@@ -309,7 +315,9 @@ class SheetPanel extends HTMLElement {
 		_.#connected = true;
 		_.#panelRef = _.panel;
 		_.#dialogRef = _.dialog;
-		_.#engine = new SheetEngine();
+		_.#engine = new SheetEngine({
+			triggerProbe: (trigger) => !!_.#usableTriggerBox(trigger),
+		});
 		_.#engine.on('snapchange', _.#handlers.snapchange);
 		_.#engine.on('change', _.#handlers.change);
 		_.#syncSpring();
@@ -405,20 +413,38 @@ class SheetPanel extends HTMLElement {
 		_.#dialogRef = null;
 		_.#profile = null;
 		_.#drag = { active: false };
+		_.#pendingProfile = null;
 		_.removeAttribute('engine');
 	}
 
 	/**
 	 * Opens through dialog-panel. The engine declares `animatesDialog`, so the
-	 * panel selects its engine transport with or without a trigger — the
-	 * trigger is passed through purely for focus return.
-	 * @param {HTMLElement} [triggerEl] - Trigger used for focus return.
+	 * panel selects its engine transport with or without a trigger.
+	 *
+	 * The trigger is used for focus return and — only when `morph-trigger` is
+	 * set — as the box the panel grows out of. Without that attribute the
+	 * entrance is the ordinary spring, exactly as it is for a bare `show()`.
+	 * @param {HTMLElement} [triggerEl] - Trigger for focus return, and the morph
+	 *   source when `morph-trigger` is set.
 	 * @returns {boolean|undefined} dialog-panel's show result.
 	 */
 	show(triggerEl) {
 		const _ = this;
 		if (window.innerWidth > _.maxDisplayWidth) return false;
 		_.#prepareOpen();
+		const dialog = _.#dialogRef;
+		// This is the one classification point for a trigger morph. The transport
+		// bit is read by dialog-panel before beforeShow, so every gate — opt-in,
+		// usable viewport box, and reduced-motion duration — has to resolve here,
+		// before delegation. A failed arm during a live spring reversal deliberately
+		// leaves that reversal direct; it can never create a later phantom reverse.
+		const morph =
+			_.morphsFromTrigger &&
+			!!triggerEl &&
+			!!dialog &&
+			_.#morphDuration(dialog) > 0 &&
+			!!_.#usableTriggerBox(triggerEl);
+		if (morph) _.#engine?.armMorph(triggerEl, { zIndex: _.#blobZIndex() });
 		return _.panel?.show(triggerEl);
 	}
 
@@ -700,6 +726,16 @@ class SheetPanel extends HTMLElement {
 		return this.getAttribute('dismiss');
 	}
 
+	/**
+	 * Whether `show(trigger)` grows the trigger's box into the panel rather than
+	 * running the spring entrance. Opt-in, because a trigger is passed to every
+	 * sheet for focus return and most of them should still slide from their edge.
+	 * @returns {boolean} True when the `morph-trigger` attribute is present.
+	 */
+	get morphsFromTrigger() {
+		return this.hasAttribute('morph-trigger');
+	}
+
 	/** @returns {number} Largest viewport width where opening is allowed. */
 	get maxDisplayWidth() {
 		const value = this.getAttribute('max-display-width');
@@ -740,7 +776,7 @@ class SheetPanel extends HTMLElement {
 		// capture the pointer at slop and starve the surface that owns it.
 		// Returning false is that refusal.
 		if (surface === 'panel' && event?.target !== _) return false;
-		if (_.#engine?.state !== 'shown' || _.#engine.morphing) {
+		if (_.#engine?.state !== 'shown' || _.#engine.morphing || _.#engine.blobFlight) {
 			_.#drag = { active: false };
 			return false;
 		}
@@ -924,11 +960,17 @@ class SheetPanel extends HTMLElement {
 	#dismiss(velocityAway) {
 		const _ = this;
 		_.#engine.setDismissVelocity(Math.max(0, velocityAway));
+		// Classification has to precede panel.hide(): dialog-panel reads
+		// animatesDialog before beforeHide. The blob stays intact until the hide is
+		// accepted, then SheetEngine releases it and immediately repaints this drag
+		// pose before the configured spring exit starts.
+		_.#engine.armGestureExit();
 		if (_.panel?.hide() === false) {
 			// A consumer vetoed beforeHide. The gesture already resolved to a
 			// dismissal, so the panel still has to land somewhere — the same
 			// redirect a refused swipe takes. Without it the panel freezes at its
 			// dragged pose, and the queued velocity would leak into the next hide.
+			_.#engine.cancelGestureExit();
 			_.#engine.setDismissVelocity(0);
 			_.#settleBack();
 		}
@@ -1001,6 +1043,19 @@ class SheetPanel extends HTMLElement {
 
 		_.#syncActiveSize(_.#engine.activeSnap);
 		_.#syncContentObserver();
+	}
+
+	#flushPendingProfile() {
+		const _ = this;
+		if (!_.#pendingProfile) return;
+		_.#pendingProfile = null;
+		const next = _.#resolveProfile();
+		if (_.#profile && _.#profileKey(next) !== _.#profileKey(_.#profile)) {
+			_.#morphToProfile();
+			return;
+		}
+		_.#applyProfile(next);
+		_.#prepareOpen();
 	}
 
 	/**
@@ -1336,6 +1391,15 @@ class SheetPanel extends HTMLElement {
 		}
 
 		const next = _.#resolveProfile();
+		// MorphEngine measured both endpoints at launch and owns every dialog style
+		// until its terminal event. Rebuilding the sheet profile underneath that
+		// snapshot would create two geometry owners, so queue one latest-value flush
+		// for `shown` instead.
+		if (_.#engine?.blobFlight) {
+			_.#pendingProfile = true;
+			return;
+		}
+		if (_.#engine?.state === 'hiding') return;
 		if (_.#profile && _.#profileKey(next) !== _.#profileKey(_.#profile) && _.panel?.isOpen) {
 			_.#morphToProfile();
 			return;
@@ -1365,6 +1429,44 @@ class SheetPanel extends HTMLElement {
 		_.#prepareOpen();
 	}
 
+	#usableTriggerBox(trigger) {
+		if (!(trigger instanceof Element) || !trigger.isConnected) return null;
+		const box = this.#readBox(trigger);
+		if (box.width <= 0 || box.height <= 0) return null;
+		if (
+			box.left >= window.innerWidth ||
+			box.top >= window.innerHeight ||
+			box.left + box.width <= 0 ||
+			box.top + box.height <= 0
+		) {
+			return null;
+		}
+		return box;
+	}
+
+	#blobZIndex() {
+		const raw = getComputedStyle(this.#dialogRef || this)
+			.getPropertyValue('--sheet-blob-z-index')
+			.trim();
+		const value = Number.parseFloat(raw);
+		return Number.isFinite(value) ? value : 1002;
+	}
+
+	#waitForMorph(dialog, duration) {
+		const _ = this;
+		const settle = () => _.#finishMorph();
+		_.#morph = {
+			dialog,
+			onEnd: (event) => {
+				if (event.target === dialog && MORPH_TRANSITION_PROPERTIES.includes(event.propertyName)) {
+					settle();
+				}
+			},
+			timer: setTimeout(settle, duration + MORPH_TIMEOUT_PADDING_MS),
+		};
+		dialog.addEventListener('transitionend', _.#morph.onEnd);
+	}
+
 	/**
 	 * Morphs an open panel between two profile geometries.
 	 *
@@ -1390,6 +1492,7 @@ class SheetPanel extends HTMLElement {
 	#morphToProfile() {
 		const _ = this;
 		const dialog = _.#dialogRef;
+		if (_.#engine?.state === 'hiding') return;
 		if (!dialog || !_.#engine) {
 			// #prepareOpen resolves and applies the profile itself.
 			_.#prepareOpen();
@@ -1440,34 +1543,23 @@ class SheetPanel extends HTMLElement {
 		).join(', ');
 		_.#pinBox(dialog, to);
 
-		const settle = () => _.#finishMorph();
-		_.#morph = {
-			dialog,
-			onEnd: (event) => {
-				if (event.target === dialog && MORPH_TRANSITION_PROPERTIES.includes(event.propertyName)) {
-					settle();
-				}
-			},
-			// The guarantee that the pins always come off. transitionend does not
-			// fire for a property that starts and ends at the same value, nor for
-			// an interrupted transition, and a stranded pin would freeze the panel
-			// in the geometry it just left.
-			timer: setTimeout(settle, duration + MORPH_TIMEOUT_PADDING_MS),
-		};
-		dialog.addEventListener('transitionend', _.#morph.onEnd);
+		// The timeout inside #waitForMorph is the guarantee that the pins always
+		// come off. transitionend does not fire for an unchanged property or an
+		// interrupted transition, and a stranded pin would freeze the panel.
+		_.#waitForMorph(dialog, duration);
 	}
 
 	/**
 	 * Strips the morph scaffolding and hands the panel back to the engine.
 	 *
-	 * Safe to call at any point, including from `beforeHide` when a morph is
-	 * still in flight — every exit route has to be able to abandon one.
+	 * Safe to call at any point: the timeout and transition listener are always
+	 * removed before the engine resumes painting.
 	 */
 	#finishMorph() {
 		const _ = this;
-		if (!_.#engine?.morphing) return;
 		_.#clearMorphTimers();
 		if (_.#dialogRef) _.#stripMorphPins(_.#dialogRef);
+		if (!_.#engine?.morphing) return;
 		_.#engine?.endMorph();
 		_.#setProgress(1, 1);
 	}
@@ -1480,14 +1572,14 @@ class SheetPanel extends HTMLElement {
 		_.#morph = null;
 	}
 
-	#readBox(dialog) {
-		const rect = dialog.getBoundingClientRect();
+	#readBox(element) {
+		const rect = element.getBoundingClientRect();
 		return {
 			top: rect.top,
 			left: rect.left,
 			width: rect.width,
 			height: rect.height,
-			borderRadius: getComputedStyle(dialog).borderRadius,
+			borderRadius: getComputedStyle(element).borderRadius,
 		};
 	}
 

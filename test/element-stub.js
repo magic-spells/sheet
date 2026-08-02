@@ -1,3 +1,25 @@
+import * as module from 'node:module';
+
+const hasRegisterHooks = typeof module.registerHooks === 'function';
+
+if (hasRegisterHooks) {
+	const morphStubUrl = new URL('./morph-engine-stub.js', import.meta.url).href;
+	module.registerHooks({
+		resolve(specifier, context, nextResolve) {
+			if (specifier.includes('@magic-spells/morph-engine')) {
+				return { url: morphStubUrl, shortCircuit: true };
+			}
+			return nextResolve(specifier, context);
+		},
+		load(url, context, nextLoad) {
+			if (url.endsWith('.css')) {
+				return { format: 'module', source: '', shortCircuit: true };
+			}
+			return nextLoad(url, context);
+		},
+	});
+}
+
 class StubStyle {
 	setProperty(name, value) {
 		this[name] = String(value);
@@ -17,10 +39,13 @@ class StubElement {
 		this.tagName = tagName.toUpperCase();
 		this.attributes = new Map();
 		this.capturedPointerIds = [];
+		this.children = [];
 		this.closestResults = new Map();
 		this.dataset = {};
 		this.dispatchedEvents = [];
+		this.isConnected = true;
 		this.listeners = new Map();
+		this.parentElement = null;
 		this.queryResults = new Map();
 		this.rect = null;
 		this.style = new StubStyle();
@@ -98,6 +123,25 @@ class StubElement {
 		return true;
 	}
 
+	append(child) {
+		child.parentElement = this;
+		this.children.push(child);
+	}
+
+	prepend(child) {
+		child.parentElement = this;
+		this.children.unshift(child);
+	}
+
+	cloneNode() {
+		const clone = new StubElement(this.tagName);
+		clone.dataset = { ...this.dataset };
+		clone.rect = this.rect ? { ...this.rect } : null;
+		for (const [name, value] of this.attributes) clone.setAttribute(name, value);
+		Object.assign(clone.style, this.style);
+		return clone;
+	}
+
 	getBoundingClientRect() {
 		if (this.rect) return { ...this.rect };
 		return {
@@ -110,7 +154,12 @@ class StubElement {
 		};
 	}
 
-	remove() {}
+	remove() {
+		if (!this.parentElement) return;
+		this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
+		this.parentElement = null;
+		this.isConnected = false;
+	}
 }
 
 let installedDomStubs;
@@ -139,7 +188,6 @@ function installDomStubs() {
 
 	const document = new StubElement('document');
 	document.body = new StubElement('body');
-	document.body.append = () => {};
 	document.documentElement = new StubElement('html');
 	document.createElement = (tagName) => new StubElement(tagName);
 
@@ -170,4 +218,4 @@ function installDomStubs() {
 	return installedDomStubs;
 }
 
-export { installDomStubs, StubElement };
+export { hasRegisterHooks, installDomStubs, StubElement };

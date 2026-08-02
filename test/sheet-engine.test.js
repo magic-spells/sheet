@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import FrameEngine from '@magic-spells/frame-engine';
+import { installDomStubs, StubElement } from './element-stub.js';
+import { MorphEngine } from './morph-engine-stub.js';
 
 import {
 	awayOffset,
@@ -28,6 +30,8 @@ import {
 	VELOCITY_BOOST,
 	FRAME_MS,
 } from '../src/sheet-engine.js';
+
+installDomStubs();
 
 const SIZE_PROPERTIES = ['width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight'];
 
@@ -925,7 +929,7 @@ test('a parked centred dialog refuses returnToRest too', async (t) => {
 	engine.destroy();
 });
 
-test('beginMorph declines unless the panel is actually shown', () => {
+test('beginMorph declines while the panel is hidden', () => {
 	const engine = new SheetEngine();
 	engine.setProfile(profileFor('bottom'));
 	engine.setSnaps([500], 0);
@@ -935,6 +939,29 @@ test('beginMorph declines unless the panel is actually shown', () => {
 	// route can call it unconditionally.
 	engine.endMorph();
 	assert.equal(engine.morphing, false);
+	engine.destroy();
+});
+
+test('beginMorph refuses and endMorph stays inert during a blob flight', () => {
+	MorphEngine.instances.length = 0;
+	const engine = makeEngine();
+	const trigger = new StubElement('button');
+	const dialog = new StubElement('dialog');
+	trigger.rect = { top: 20, left: 20, right: 68, bottom: 68, width: 48, height: 48 };
+	dialog.rect = { top: 100, left: 0, right: 400, bottom: 600, width: 400, height: 500 };
+	engine.armMorph(trigger);
+	void engine.show({ from: trigger, to: dialog });
+	const blob = MorphEngine.instances.at(-1);
+
+	assert.equal(engine.blobFlight, true);
+	assert.equal(engine.beginMorph(), false);
+	engine.endMorph();
+	assert.equal(engine.blobFlight, true);
+	assert.equal(engine.morphing, false);
+	assert.equal(dialog.style.getPropertyValue('transform'), '');
+	assert.equal(dialog.style.getPropertyValue('height'), '');
+
+	blob.step(1);
 	engine.destroy();
 });
 
@@ -2444,7 +2471,8 @@ test('every preset is damped enough that nothing wobbles', () => {
 	// No phase oscillates. `snap` is the one that breathes past its target, and
 	// it does so once, by a few percent — the room a flick needs to read as a
 	// throw.
-	for (const preset of Object.values(SPRING_PRESETS)) {
+	for (const name of ['entrance', 'exit', 'snap', 'rest']) {
+		const preset = SPRING_PRESETS[name];
 		assert.ok(preset.attraction > 0 && preset.attraction < 1);
 		assert.ok(preset.friction > 0 && preset.friction < 1);
 		assert.ok(simulateSpring(preset).maxProgress <= 1.03);
@@ -2500,6 +2528,24 @@ test('spring presets land in their timing budgets', () => {
 		// velocity — every settle looked identical however hard it was thrown.
 		snap: { ms: [500, 640], t90: [170, 250], overshoot: [0.015, 0.035] },
 		rest: { ms: [300, 400], t90: [140, 240], overshoot: [0, 0.005] },
+		// The blob is the one motion with room for a real bounce: it is arriving,
+		// nothing waits on it, and the overshoot reads as the panel springing out
+		// of the trigger. Budgeted well above snap's breath on purpose.
+		morph: { ms: [480, 590], t90: [140, 200], overshoot: [0.04, 0.075] },
+		// The return is the morph in with attraction eased off and friction
+		// raised: same elastic character, a little calmer and a little less
+		// breath. Reaching for a HIGH attraction instead is the mistake this
+		// budget exists to prevent — 0.42 settled fast on paper (t90 67ms) and
+		// read as stiff, because a spring that covers 90% of its distance in
+		// four frames is a yank with a wobble on the end, not a spring. The
+		// t90 floor is what keeps a future retune from going back there.
+		// Tuned by eye to a low attraction: the return travels at roughly the
+		// arrival's weight rather than snapping back. High attraction was tried
+		// repeatedly and rejected every time — 0.42 (t90 67ms) and 0.28 (t90
+		// 117ms) both read as too abrupt, whatever their overshoot. What that
+		// costs is the bounce: at a=0.07 the pull is too weak to carry much
+		// momentum past the target, so friction at 0.34 leaves well under 1%.
+		morphBack: { ms: [470, 570], t90: [170, 240], overshoot: [0.008, 0.02] },
 	};
 
 	for (const [name, budget] of Object.entries(budgets)) {
@@ -2526,6 +2572,30 @@ test('spring presets land in their timing budgets', () => {
 		Math.max(0, simulateSpring(SPRING_PRESETS.snap).maxProgress - 1) >
 			Math.max(0, simulateSpring(SPRING_PRESETS.rest).maxProgress - 1),
 		'a bottom snap breathes where a side return, which has no room, does not'
+	);
+
+	// The whole point of splitting the blob presets: the direction is what
+	// decides the bounce, not the engine. Asserted as an ordering rather than as
+	// two absolute numbers so a later retune of both cannot quietly collapse
+	// them back into one value that satisfies each budget on its own.
+	const morphIn = simulateSpring(SPRING_PRESETS.morph);
+	const morphOut = simulateSpring(SPRING_PRESETS.morphBack);
+	assert.ok(
+		Math.max(0, morphIn.maxProgress - 1) > Math.max(0, morphOut.maxProgress - 1) + 0.02,
+		'growing out of the trigger bounces harder than returning to it'
+	);
+	// The blob pair follows exit-against-entrance on SETTLE only. It does not on
+	// t90 — the return reaches 90% at 233ms against the arrival's 167ms — and
+	// that is a deliberate exception rather than drift. Every tuning that made
+	// the return quicker off the line needed a high attraction (0.28, 0.42), and
+	// each was rejected on sight as too abrupt for a panel collapsing back into
+	// a small button. The blob is not the sheet: an edge-anchored panel leaving
+	// the screen wants to go, a box shrinking into its own trigger wants to be
+	// followed. So the return is the calmer motion here, and only the tail is
+	// asked to be shorter.
+	assert.ok(
+		morphOut.ms < morphIn.ms,
+		'the return to the trigger settles sooner than the flight out of it'
 	);
 
 	// Leaving should always feel faster than arriving.

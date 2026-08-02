@@ -5,7 +5,11 @@ import liveReload from '@magic-spells/vite-plugin-live-reload';
 
 const isDev = process.env.NODE_ENV === 'development';
 const outDir = isDev ? 'demo/dist' : 'dist';
-const runtimeDependencies = ['@magic-spells/frame-engine', '@magic-spells/physics-engine'];
+const runtimeDependencies = [
+	'@magic-spells/frame-engine',
+	'@magic-spells/morph-engine',
+	'@magic-spells/physics-engine',
+];
 
 function sharedBuild(overrides = {}) {
 	return {

@@ -35,6 +35,7 @@
 			{
 				"imports": {
 					"@magic-spells/frame-engine": "./vendor/frame-engine.esm.js",
+					"@magic-spells/morph-engine": "./vendor/morph-engine.esm.js",
 					"@magic-spells/physics-engine": "./vendor/physics-engine.esm.js"
 				}
 			}
@@ -155,11 +156,12 @@
 			}
 
 			/* ------------------------------------------------
-			   Frosted-glass scrim (demo-only — matches the
-			   dialog-panel demo; consumers can layer the same
-			   noise + saturate onto the ::backdrop scrim)
+			   Frosted-glass overlay (demo-only — matches the
+			   dialog-panel demo; consumers layer the same noise
+			   + saturate onto <dialog-backdrop>, which is the
+			   one overlay surface across the whole family)
 			------------------------------------------------ */
-			dialog-panel:has(sheet-panel) > dialog::backdrop {
+			dialog-panel:has(sheet-panel) > dialog-backdrop {
 				backdrop-filter: blur(var(--sheet-overlay-blur)) saturate(115%);
 				-webkit-backdrop-filter: blur(var(--sheet-overlay-blur)) saturate(115%);
 				background-image: url('./bg-noise.png');
@@ -1411,6 +1413,13 @@
 						rel="noopener"
 						><span class="dep-scope">@magic-spells/</span>frame-engine</a
 					>
+					<a
+						class="dep-badge"
+						href="https://github.com/magic-spells/morph-engine"
+						target="_blank"
+						rel="noopener"
+						><span class="dep-scope">@magic-spells/</span>morph-engine</a
+					>
 				</div>
 			</div>
 
@@ -1627,7 +1636,8 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 							<div class="profile-side" data-side="mobile">
 								<span class="profile-side-key">Mobile</span>
 								<span class="profile-side-val"
-									>Action sheet at <code>34vh</code>, sliding up from the bottom edge.</span
+									>Action sheet at <code>34vh</code>, floating clear of the bottom edge as an inset
+									card.</span
 								>
 							</div>
 							<div class="profile-side" data-side="desktop">
@@ -1636,6 +1646,11 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 									>Centred modal sized by its own content, fading up in place.</span
 								>
 							</div>
+							<p class="profile-side-val">
+								With <code>morph-trigger</code>, the opener becomes a spring-driven blob and stays
+								hidden while the sheet is open. Deliberate closes morph back; a swipe restores the
+								opener and takes the configured sheet exit.
+							</p>
 							<button class="btn" data-open="confirm-panel">Open</button>
 						</div>
 
@@ -1842,7 +1857,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 				<div class="spec">
 					<span class="spec-key">Lab</span>
 					<span class="spec-rule" aria-hidden="true"></span>
-					<span class="spec-val">mobile + desktop · exits · routes · 2 dials</span>
+					<span class="spec-val">mobile + desktop · exits · morph · routes · 2 dials</span>
 				</div>
 				<h2>Set the dials, and read back the markup.</h2>
 				<p class="demo-desc">
@@ -2034,7 +2049,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 					</div>
 
 					<div class="lab-group">
-						<span class="lab-group-title" id="lab-title-effect">Effect</span>
+						<span class="lab-group-title" id="lab-title-effect">Entrance effect</span>
 						<div class="lab-cols">
 							<div class="lab-field">
 								<span class="lab-legend" id="lab-legend-effect">Mobile</span>
@@ -2194,6 +2209,28 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 						</div>
 					</div>
 
+					<!-- morph-trigger is a boolean opt-in, not a value, so it is one
+					     switch rather than a segmented pair. It replaces the entrance
+					     effect above with a blob grown from the opener's own box, which
+					     is why it needs a trigger — every button in this demo passes
+					     one through show(trigger). The exit effect still applies to a
+					     swipe-close, which restores the opener rather than morphing back. -->
+					<div class="lab-group">
+						<span class="lab-group-title" id="lab-legend-morph">Trigger morph</span>
+						<span class="lab-hint"
+							>off = the entrance effect above · on = grow from the opener</span
+						>
+						<div class="seg" role="group" aria-labelledby="lab-legend-morph">
+							<button
+								class="seg-btn"
+								type="button"
+								aria-pressed="false"
+								data-lab-toggle="morph-trigger">
+								morph-trigger
+							</button>
+						</div>
+					</div>
+
 					<!-- One switch per route, because they are genuinely independent: a
 					     drawer that a stray swipe must not close can still be
 					     dismissed by clicking outside it. All three off is dismiss="none". -->
@@ -2256,7 +2293,12 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 					</div>
 
 					<div class="lab-group">
-						<span class="lab-group-title">Spring · entrances only</span>
+						<!-- One `spring` attribute, but which ENGINE it tunes depends on
+						     morph-trigger: the sheet's own spring normally, the trigger
+						     blob when the morph is armed. The title reports which, because
+						     the dials are otherwise identical and the difference is
+						     invisible until you open the panel. -->
+						<span class="lab-group-title" id="lab-spring-title">Spring · entrances only</span>
 						<label class="lab-dial">
 							<span class="lab-dial-name">Attraction · travel speed</span>
 							<span class="lab-value" id="lab-attraction-val">0.055</span>
@@ -2307,11 +2349,11 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 				<div class="spec">
 					<span class="spec-key">Reference</span>
 					<span class="spec-rule" aria-hidden="true"></span>
-					<span class="spec-val">14 attributes · 25 tokens</span>
+					<span class="spec-val">14 attributes · 26 tokens</span>
 				</div>
-				<h2>Fourteen attributes and twenty-five dials.</h2>
+				<h2>Fourteen attributes and twenty-six dials.</h2>
 				<p class="demo-desc">
-					Five elements, fourteen attributes, twenty-five style tokens, three methods, and six
+					Five elements, fourteen attributes, twenty-six style tokens, three methods, and six
 					events. Everything else is ordinary HTML you write yourself, inside a real native
 					<code>&lt;dialog&gt;</code>.
 				</p>
@@ -2631,12 +2673,20 @@ sheet.hide();</pre>
 					<div class="ref-row">
 						<div><code>--sheet-morph-duration</code></div>
 						<div><code>600ms</code></div>
-						<div>Profile-morph duration; <code>0</code> swaps instantly.</div>
+						<div>
+							Profile-morph duration and trigger-blob reduced-motion gate; <code>0</code> swaps a
+							profile instantly and skips the blob.
+						</div>
 					</div>
 					<div class="ref-row">
 						<div><code>--sheet-morph-easing</code></div>
 						<div><code>cubic-bezier(0.34, 1.32, 0.52, 1)</code></div>
 						<div>Profile-morph easing; overshoots slightly by default.</div>
+					</div>
+					<div class="ref-row">
+						<div><code>--sheet-blob-z-index</code></div>
+						<div><code>1002</code></div>
+						<div>Trigger-morph blob layer, above the scrim at 1000 and panel at 1001.</div>
 					</div>
 					<div class="ref-row">
 						<div><code>--sheet-backdrop-progress</code></div>
@@ -3376,7 +3426,9 @@ sheet.hide();</pre>
 		<dialog-panel id="confirm-panel">
 			<dialog aria-labelledby="confirm-title">
 				<sheet-panel
+					morph-trigger
 					snap-points="34vh"
+					mode="card"
 					effect="slide"
 					desktop-position="center"
 					desktop-effect="fade-scale">
@@ -4003,6 +4055,23 @@ sheet.hide();</pre>
 			const attractionOut = $('#lab-attraction-val');
 			const frictionOut = $('#lab-friction-val');
 			const springNote = $('#lab-spring-note');
+			const springTitle = $('#lab-spring-title');
+
+			// Mirrors SPRING_PRESETS in sheet-engine.js. The dials have to seed from
+			// whichever engine flies the arrival, or arming the morph leaves the
+			// entrance spring's numbers on screen next to a blob that never uses
+			// them — the dials would read as an override that is not in force.
+			const LAB_SPRING_DEFAULTS = {
+				entrance: { attraction: '0.055', friction: '0.32' },
+				morph: { attraction: '0.07', friction: '0.28' },
+			};
+
+			const seedSpringDials = () => {
+				const preset =
+					LAB_SPRING_DEFAULTS[labSheet.hasAttribute('morph-trigger') ? 'morph' : 'entrance'];
+				attractionDial.value = preset.attraction;
+				frictionDial.value = preset.friction;
+			};
 			const labSnapField = $('#lab-snap-field');
 
 			// Snap points belong to MOBILE bottom sheets. Side positions remove the
@@ -4085,6 +4154,7 @@ sheet.hide();</pre>
 			// Printed in this order regardless of the order they were set in, so
 			// the snippet reads the same way twice. Absent attributes are skipped.
 			const LAB_CODE_ATTRS = [
+				'morph-trigger',
 				'position',
 				'mode',
 				'effect',
@@ -4107,10 +4177,13 @@ sheet.hide();</pre>
 					.replace(/"/g, '&quot;');
 
 			const renderLabCode = () => {
-				const rows = LAB_CODE_ATTRS.filter((name) => labSheet.hasAttribute(name)).map(
-					(name) =>
-						`  <span class="hl-attr">${esc(name)}</span>=<span class="hl-val">"${esc(labSheet.getAttribute(name))}"</span>`
-				);
+				const rows = LAB_CODE_ATTRS.filter((name) => labSheet.hasAttribute(name)).map((name) => {
+					// A boolean attribute is present with an empty value. Printing it
+					// as ="" would show markup nobody should copy.
+					const value = labSheet.getAttribute(name);
+					if (value === '') return `  <span class="hl-attr">${esc(name)}</span>`;
+					return `  <span class="hl-attr">${esc(name)}</span>=<span class="hl-val">"${esc(value)}"</span>`;
+				});
 				labCode.innerHTML = [
 					'&lt;<span class="hl-tag">sheet-panel</span>',
 					`${rows.join('\n')}&gt;`,
@@ -4151,6 +4224,27 @@ sheet.hide();</pre>
 					return;
 				}
 
+				// A boolean attribute has no value to select between, so it is a
+				// switch too — present or absent, written as the empty string.
+				const toggle = event.target.closest('[data-lab-toggle]');
+				if (toggle) {
+					const next = toggle.getAttribute('aria-pressed') !== 'true';
+					toggle.setAttribute('aria-pressed', String(next));
+					toggle.classList.toggle('is-active', next);
+					if (next) labSheet.setAttribute(toggle.dataset.labToggle, '');
+					else labSheet.removeAttribute(toggle.dataset.labToggle);
+					// Arming the morph changes which engine the spring dials tune, so
+					// the group relabels AND re-seeds to that engine's own preset.
+					// Only while the presets are in force, though: once a dial has
+					// been moved the numbers are the user's, and re-seeding would
+					// throw their override away on an unrelated toggle.
+					if (!labSheet.hasAttribute('spring')) seedSpringDials();
+					// `false` — never write the attribute from here, or toggling the
+					// morph would silently pin an override.
+					applySpring(false);
+					return;
+				}
+
 				const button = event.target.closest('[data-lab-group]');
 				if (!button) return;
 				const { labGroup, labValue } = button.dataset;
@@ -4178,9 +4272,20 @@ sheet.hide();</pre>
 				if (write) {
 					labSheet.setAttribute('spring', `${attractionDial.value} ${frictionDial.value}`);
 				}
+				// `spring` governs the ARRIVAL, and with morph-trigger armed the
+				// arrival is flown by the blob rather than by the sheet's own spring —
+				// so the dials retarget rather than going inert. The return to the
+				// trigger is pinned to its preset for the same reason sheet exits are.
+				const morphing = labSheet.hasAttribute('morph-trigger');
+				springTitle.textContent = morphing
+					? 'Spring · trigger morph in'
+					: 'Spring · entrances only';
+				const scope = morphing
+					? 'Driving the <strong>trigger blob</strong> on the way in — the morph back to the opener keeps its own preset.'
+					: 'Entrances only — exits and snaps keep their presets.';
 				springNote.innerHTML = labSheet.hasAttribute('spring')
-					? 'Override in force. Entrances only — exits and snaps keep their presets.'
-					: 'Presets in force — no <code>spring</code> attribute set.';
+					? `Override in force. ${scope}`
+					: `Presets in force — no <code>spring</code> attribute set. ${scope}`;
 				renderLabCode();
 			};
 
@@ -4190,8 +4295,9 @@ sheet.hide();</pre>
 
 			$('#lab-spring-reset').addEventListener('click', () => {
 				labSheet.removeAttribute('spring');
-				attractionDial.value = attractionDial.defaultValue;
-				frictionDial.value = frictionDial.defaultValue;
+				// Not defaultValue — that is the markup's entrance pair, which would
+				// be the wrong preset to reset to while the morph is armed.
+				seedSpringDials();
 				applySpring(false);
 			});
 

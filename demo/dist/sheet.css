@@ -23,6 +23,7 @@
   --sheet-exit-cushion: 28px;
   --sheet-morph-duration: .6s;
   --sheet-morph-easing: cubic-bezier(.34, 1.32, .52, 1);
+  --sheet-blob-z-index: 1002;
 }
 
 dialog-panel[morph][state]:has(sheet-panel) > dialog {
@@ -146,26 +147,21 @@ dialog-panel[morph][state]:has(sheet-panel[data-mode="edge"][data-position="righ
 }
 
 dialog-panel:has(sheet-panel) > dialog-backdrop {
-  display: none;
-}
-
-dialog-panel:has(sheet-panel) > dialog::backdrop {
   background: var(--sheet-overlay-background);
   -webkit-backdrop-filter: blur(var(--sheet-overlay-blur));
   opacity: 0;
+}
+
+:is(dialog-panel[morph][state="showing"]:has(sheet-panel) > dialog-backdrop, dialog-panel[morph][state="shown"]:has(sheet-panel) > dialog-backdrop) {
+  opacity: var(--sheet-backdrop-progress, 1);
+  pointer-events: auto;
   transition: none;
 }
 
-dialog-panel[morph][state="showing"]:has(sheet-panel) > dialog::backdrop {
-  opacity: var(--sheet-backdrop-progress, 1);
-}
-
-dialog-panel[morph][state="shown"]:has(sheet-panel) > dialog::backdrop {
-  opacity: var(--sheet-backdrop-progress, 1);
-}
-
-dialog-panel[morph][state="hiding"]:has(sheet-panel) > dialog::backdrop {
+dialog-panel[morph][state="hiding"]:has(sheet-panel) > dialog-backdrop {
   opacity: var(--sheet-backdrop-progress, 0);
+  pointer-events: auto;
+  transition: none;
 }
 
 sheet-panel {

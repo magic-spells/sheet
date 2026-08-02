@@ -36,10 +36,16 @@
 	/* Profile morph. The one motion in this package that is not spring-driven:
 	   crossing a breakpoint interpolates a BOX between two resting geometries,
 	   and there is no meaningful spring position for a run whose start and end
-	   share almost no properties. Read from JS as well as applied here, so
-	   zeroing the duration collapses the morph to an instant swap. */
+	   share almost no properties. The duration is also the reduced-motion gate
+	   for a trigger blob: zero means classify the open as an ordinary spring run,
+	   whose own reduced-motion policy can settle without constructing a blob. */
 	--sheet-morph-duration: 600ms;
 	--sheet-morph-easing: cubic-bezier(0.34, 1.32, 0.52, 1);
+
+	/* Keep the three transport surfaces adjacent: dialog-panel's scrim is 1000,
+	   the real sheet is 1001, and the travelling blob alone sits above both.
+	   Extreme z-indices recreate the compositor re-sort flicker this stack avoids. */
+	--sheet-blob-z-index: 1002;
 }
 
 /* The engine writes motion inline. These rules only establish resting geometry. */
@@ -215,43 +221,47 @@ dialog-panel[morph][state]:has(sheet-panel[data-mode='edge'][data-position='righ
 		var(--sheet-panel-box-shadow);
 }
 
-/* Single-backdrop architecture: the native ::backdrop IS the scrim. It lives
-   in the top layer, born and dying with the dialog — one viewport surface,
-   nothing for showModal()'s insertion to re-sort against. The previous shape
-   (a transparent ::backdrop inserted above a glass <dialog-backdrop> element)
-   made every open re-rasterize the glass layer, an intermittent whole-page
-   flicker on GPU-heavy pages. A sheet can own its scrim this way because the
-   direct engine keeps the dialog open for the entire exit — the scrim fades
-   out fully before close(). Clicks on ::backdrop still report the dialog as
-   their target, so backdrop-tap dismissal and the dismiss-policy guards are
-   unchanged. */
-dialog-panel:has(sheet-panel) > dialog-backdrop {
-	display: none;
-}
+/* Single-overlay architecture: <dialog-backdrop> is the component family's ONE
+   overlay surface. A sheet, a bottom-sheet and a plain dialog-panel are all
+   styled the same way, and — the point of standardising — attaching a morph
+   engine later needs no CSS rewrite at all. A proxy engine flies its blob in
+   normal flow, and only an element can sit beneath that; a top-layer
+   ::backdrop would paint over the blob and its backdrop-filter would blur the
+   very thing in flight. dialog-panel keeps the native ::backdrop transparent
+   for every panel, so nothing has to be neutralised here.
 
-dialog-panel:has(sheet-panel) > dialog::backdrop {
+   Clicks land on dialog-backdrop rather than on the dialog, but the dismiss
+   policy is unaffected: #outsideGuard is bound to dialog-panel in the CAPTURE
+   phase, so it still runs ahead of DialogBackdrop's own click handler and a
+   refused dismissal never reaches it. */
+dialog-panel:has(sheet-panel) > dialog-backdrop {
 	background: var(--sheet-overlay-background);
 	backdrop-filter: blur(var(--sheet-overlay-blur));
 	-webkit-backdrop-filter: blur(var(--sheet-overlay-blur));
-	/* JS drives opacity per frame through the token — a transition would lag
-	   the spring. */
-	transition: none;
 	opacity: 0;
 }
 
 /* The overlay tracks the DISMISSAL ZONE rather than raw progress, so it fades
    with the sheet on the way in and out but holds rock steady through
    snap-to-snap travel and rubber-band overscroll. The token is written on the
-   dialog-panel and reaches the pseudo-element by inheritance (panel → dialog
-   → ::backdrop, per the modern spec). No hidden-state filter toggle is needed
-   any more: a closed dialog has no ::backdrop at all. */
-dialog-panel[morph][state='showing']:has(sheet-panel) > dialog::backdrop,
-dialog-panel[morph][state='shown']:has(sheet-panel) > dialog::backdrop {
+   dialog-panel and reaches the element by inheritance.
+
+   `transition: none` is repeated on each state rule rather than set once on the
+   base selector above: dialog-panel's own [state='hiding'] > dialog-backdrop
+   rule carries a 0.2s opacity transition at HIGHER specificity than that base,
+   so without the repeat it would win on the way out and lag the spring. JS
+   drives opacity per frame; nothing here may transition. */
+dialog-panel[morph][state='showing']:has(sheet-panel) > dialog-backdrop,
+dialog-panel[morph][state='shown']:has(sheet-panel) > dialog-backdrop {
 	opacity: var(--sheet-backdrop-progress, 1);
+	transition: none;
+	pointer-events: auto;
 }
 
-dialog-panel[morph][state='hiding']:has(sheet-panel) > dialog::backdrop {
+dialog-panel[morph][state='hiding']:has(sheet-panel) > dialog-backdrop {
 	opacity: var(--sheet-backdrop-progress, 0);
+	transition: none;
+	pointer-events: auto;
 }
 
 sheet-panel {

@@ -42,8 +42,6 @@ Required nesting:
 </dialog-panel>
 ```
 
-There is deliberately no morph-engine integration in v1.
-
 ## Engine Transport Seam
 
 `SheetEngine` is assigned to `panel.morphEngine`, using dialog-panel's established duck-typed transport:
@@ -56,11 +54,21 @@ on(name, listener)
 off(name, listener)
 ```
 
-SheetEngine declares `animatesDialog: true`, marking it a **direct** engine: it flies the real dialog, visible for the whole flight. That one bit is what tells dialog-panel the safe top-layer moments — the opposite of a proxy engine like MorphEngine, which flies a stand-in blob while the real dialog stays invisible.
+`animatesDialog` is a dynamic getter, not a declaration about the engine as a whole. SheetEngine is normally a **direct** engine that flies the real dialog, but an armed trigger morph temporarily makes it a **proxy** engine whose inner MorphEngine flies a stand-in blob while the real dialog stays invisible. That one bit tells dialog-panel which top-layer choreography is safe for the run it is about to start.
+
+| initiator | transport selected by `animatesDialog` |
+| --- | --- |
+| `sheet.show(trigger)` with `morph-trigger`, a usable trigger, and a non-zero morph duration | proxy blob (`false`) |
+| `panel.show()` called directly, or any show with no armed morph | direct spring (`true`) |
+| close button, Escape, backdrop, or programmatic `hide()` while a usable trigger morph is live | proxy reverse (`false`) |
+| swipe dismissal after `armGestureExit()` | direct spring exit (`true`) |
+| deliberate close after the trigger has detached or left the viewport | direct spring exit (`true`) |
+
+dialog-panel reads `direct` at the **top** of `show()` and `hide()`, before it emits `beforeShow` or `beforeHide`. That ordering is load-bearing: the initiator must arm the transport before delegating to the panel, and nothing inside either lifecycle handler may try to change the mode. Doing it there is already too late — dialog-panel has chosen when to promote or demote the native dialog — and leaves the engine and panel following different ownership rules for the same run. `SheetPanel.show()` is therefore the one trigger-morph classification point, and the gesture release arms its direct exit before it calls `panel.hide()`.
 
 - **Promotion happens at show-start.** `panel.show()` calls `engine.show()`, which synchronously paints the hidden `p = 0` frame, then `showModal()` in the same task — so the promotion repaint lands while nothing is visible. Promoting at settle instead repaints the fully visible panel (a one-frame color/compositing shift); that was the original bug, in both engines' transports.
 - **Demotion happens after the hidden settle.** The panel does not close the dialog at hide-start; the exit runs fully modal and `dialog.close()` fires from dialog-panel's finalize when the engine emits `hidden`, with the panel invisible again. Two knock-ons are deliberate, matching the CSS path and bottom-sheet: taps during the exit land on `::backdrop` and are dead, and focus (including `autofocus`) enters the sheet at entrance-start, not settle.
-- Dialog-panel also listens for engine `stop` (finalize without exit animation) and, for proxy engines only, `reveal` (their mid-flight promotion point). SheetEngine never needs `reveal` — its safe moment is the run boundary.
+- Dialog-panel also listens for engine `stop` (finalize without exit animation) and, for proxy runs only, `reveal` (their mid-flight promotion point). A direct SheetEngine run needs no `reveal`; a trigger morph forwards the inner engine's one because its safe moment is inside the blob flight.
 
 Because the engine declares itself, the panel selects the engine transport with or without a trigger; `SheetPanel.show(trigger)` passes the trigger straight through, purely for focus return. The old `panel.show(trigger || this)` hack is gone — do not reintroduce it.
 
@@ -77,6 +85,18 @@ dialog-panel:has(sheet-panel) > dialog[open] {
 ```
 
 Never put `display:flex` on the closed base dialog. A closed dialog must retain the UA's `display:none`, or `[morph]` makes it paint at rest. SheetEngine still sets inline `display:flex` in `#prepareDialog` and restores it at the shown settle — under promotion-at-start both are computed no-ops (`dialog[open]` supplies `flex`), kept as the safety net that returns a force-closed dialog to the UA's `display:none`.
+
+## Trigger Morph
+
+A trigger flight has exactly two geometry owners, never two writers on one element. MorphEngine owns the dialog's inline styles from the instant the blob is launched through its inner `shown` or `hidden`; SheetEngine parks for that whole window and paints nothing. The handoff on open happens only after the inner `shown`, when MorphEngine has finished restoring its target snapshot: SheetEngine then builds the resting track and paints `p = 1`. Painting even SheetEngine's hidden `p = 0` frame before launch would put that frame into MorphEngine's snapshot, and MorphEngine would restore it over the settled panel at the handoff — the blob would arrive correctly and the real dialog would jump back off screen.
+
+The inner engine's `stop` event is deliberately swallowed. `#releaseBlob()` uses `blob.stop()` as a transport handoff for a swipe dismissal, not as a request to close the dialog; forwarding that event would make dialog-panel finalize and demote the dialog in the middle of the swipe release, just before SheetEngine starts the direct exit. Only `SheetEngine.stop()` forwards its own terminal `stop`, because that is the actual force-close path.
+
+Stopping the blob restores the inline snapshot it took before the flight, which also erases the live drag pose SheetEngine painted after the panel landed. `#releaseBlob()` must therefore call `#applyFrame(#p)` in the **same task** as `blob.stop()`. Waiting for the first spring frame leaves one paint opportunity in which the blob is gone, the trigger is visible again, and the dialog has snapped back to rest before continuing its exit from the finger's release point.
+
+Calling `show()` while a reverse blob flight is running turns the existing MorphEngine run around; it never builds a second blob or a second set of keyframes. In that direction the dialog is the run's source, and MorphEngine has no source-side `reveal` event, so SheetEngine re-emits `reveal { to: dialog }` synchronously before asking the blob to reverse. Without it dialog-panel would keep the native dialog demoted until `shown`, then promote a fully visible settled surface in one repaint.
+
+Focus timing follows the transport boundary. A direct spring promotes at entrance-start, so focus and `autofocus` enter then. A trigger morph keeps the real dialog out of the top layer while the blob establishes the geometry and moves focus only when the forwarded `reveal` promotes it. Moving focus earlier would target a dialog that is deliberately still invisible; moving it to settle would recreate the visible promotion repaint the reveal seam exists to avoid.
 
 ## Motion Architecture
 

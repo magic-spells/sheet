@@ -109,7 +109,34 @@ Keep the canonical nesting intact. `dialog-panel` owns the native dialog, while 
 </script>
 ```
 
-Always open through `sheet.show(trigger)`. The trigger is passed straight through to dialog-panel and is used for one thing only — returning focus when the sheet closes — so it is optional: the engine declares itself as the one animating the dialog, and that is what selects the engine transport, with or without a trigger. Pass a trigger whenever there is one; a sheet opened from a timer or a route change can call `sheet.show()` bare and focus simply returns wherever it was. Elements with `data-action-hide-dialog` continue to use dialog-panel's built-in delegation.
+Always open through `sheet.show(trigger)`. The trigger is passed straight through to dialog-panel and is used for returning focus when the sheet closes, so it is optional: the engine declares itself as the one animating the dialog, and that is what selects the engine transport, with or without a trigger. Pass a trigger whenever there is one; a sheet opened from a timer or a route change can call `sheet.show()` bare and focus simply returns wherever it was. Elements with `data-action-hide-dialog` continue to use dialog-panel's built-in delegation.
+
+### Growing out of the trigger
+
+Add `morph-trigger` and the panel grows from the trigger's own box instead of sliding in
+from its edge, then shrinks back into it on close. The destination is whatever the active
+profile resolves to, so the same markup flies to a centered card on mobile and a right
+drawer on desktop:
+
+```html
+<sheet-panel morph-trigger snap-points="48vh 92vh" desktop-position="right" desktop-mode="card">
+```
+
+It is **opt-in on purpose.** A trigger is passed to every sheet for focus return, so
+morphing on its mere presence would rewrite the entrance of every sheet on a page. Without
+the attribute a trigger stays focus-return only and the entrance is the ordinary spring.
+
+Swipe, snap points, and rubber-band all behave normally once the panel lands.
+
+**Only deliberate closes reverse into the trigger** — the close button, Escape, a backdrop
+tap. A swipe dismissal takes the ordinary spring exit off screen instead: a fling owns a
+direction and a momentum, and the trigger is wherever it happens to sit, often back up the
+page, so curving the exit into it fights the gesture and reads as two competing animations.
+
+The morph is likewise skipped, and the ordinary spring runs, whenever it cannot be done
+honestly — no trigger passed, the trigger removed from the DOM or scrolled out of view
+before close, or `prefers-reduced-motion`, which zeroes `--sheet-morph-duration` and
+collapses the whole thing to an instant swap.
 
 ## Sizing
 
@@ -276,6 +303,7 @@ dismiss returns it to rest rather than snapping.
 | --- | --- | --- | --- |
 | `snap-points` | `snapPoints` | `85vh` | **Mobile bottom only** — space-separated CSS heights, resolved at open and resize. Ignored past `breakpoint`, and by every non-bottom position |
 | `initial-snap` | `initialSnap` | last | Zero-based initial mobile bottom snap |
+| `morph-trigger` | `morphsFromTrigger` | absent | Grow out of the trigger passed to `show(trigger)` rather than sliding in from the edge, and shrink back into it on close. Opt-in; falls back to the spring entrance when there is no usable trigger |
 | `position` | `position` | `bottom` | Mobile placement: `bottom`, `left`, `right`, or `center` |
 | `mode` | `mode` | `edge` | Mobile geometry: `edge` or `card`. **Ignored by a `center` position** on every viewport, which rests against no edge to be flush with or float from — see the `center` note above |
 | `effect` | `effect` | `slide` | Mobile motion effect |
@@ -376,7 +404,7 @@ Set tokens on `:root`, a panel, or another ancestor.
 
 | Method | Description |
 | --- | --- |
-| `show(triggerEl)` | Resolve the active profile and open through dialog-panel's engine transport. `triggerEl` is optional and only ever used for focus return |
+| `show(triggerEl)` | Resolve the active profile and open through dialog-panel's engine transport. `triggerEl` is optional; it is used for focus return, and — only with `morph-trigger` — as the box the panel grows out of |
 | `hide()` | Close through dialog-panel |
 | `snapTo(index)` | Spring a mobile bottom sheet to a zero-based snap index; inert on every other profile, which has a single snap |
 

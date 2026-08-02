@@ -30,41 +30,92 @@ dialog-panel > dialog {
 		transform 0.3s ease-out;
 }
 
-/* When using dialog-backdrop element, make native ::backdrop transparent
-   but keep it clickable (clicks detected via bounding rect check) */
-dialog-panel:has(dialog-backdrop) > dialog::backdrop {
+/* <dialog-backdrop> is THE overlay surface across the component family —
+   dialog-panel, sheet, bottom-sheet and anything downstream all paint
+   here, so one element and one set of tokens describe the overlay
+   everywhere. connectedCallback creates it unconditionally, so it is
+   always available and no consumer has to opt in.
+
+   It is also what makes a morph transport work: a proxy engine flies its
+   blob in normal flow (@magic-spells/morph-engine appends it to
+   document.body), so the overlay has to be a normal DOM element the blob
+   can pass ABOVE. A top-layer ::backdrop would paint over the blob and
+   its backdrop-filter would blur the very thing in flight.
+
+   The native ::backdrop is therefore kept transparent — still present,
+   still clickable, so outside-click detection via the bounding-rect
+   check is unaffected. */
+dialog-panel > dialog::backdrop {
 	background: transparent;
 }
 
-/* Native backdrop (when not using dialog-backdrop) */
-dialog-panel:not(:has(dialog-backdrop)) > dialog::backdrop {
-	background: rgba(0, 0, 0, 0.3);
-	opacity: 0;
-	transition: opacity 0.3s ease-out;
-}
-
-/* Custom dialog-backdrop element.
-
-   The z-index is deliberately modest and tokenized. An extreme value
+/* The z-index is deliberately modest and tokenized. An extreme value
    (this used to be 9999999) puts a backdrop-filter-capable layer at the
    very top of the stacking order, and every showModal() top-layer
    insertion then forces the compositor to re-sort and re-rasterize
    around it — a whole-page GPU job landing on the open frame, visible
    as an intermittent, load-dependent flicker on heavy pages. A sane
    value keeps the layer order stable across promotion; raise the token
-   only as far as the page's own stacking actually requires. */
+   only as far as the page's own stacking actually requires.
+
+   Layer stability is the other half of that fix, and it is handled by
+   `display` and `will-change` below.
+
+   `display: none` while closed is what keeps the overlay as cheap as a
+   ::backdrop. What made the pseudo-element fast was never that it is a
+   pseudo-element — it is that it exists ONLY while the dialog is open.
+   This element is persistent and 200vw x 200dvh, and the whole point of
+   the single-surface contract is that consumers paint their scrim here,
+   `backdrop-filter` included. A backdrop-filter forces a backdrop root:
+   the compositor must isolate and snapshot everything painted behind the
+   element. `opacity: 0` does NOT exempt it — the element still forms a
+   stacking context and still composites — so without this the mere
+   presence of a dialog-panel costs a full-viewport blur layer on first
+   paint, before anything has been opened, once per panel on the page.
+
+   It also restores atomic birth/death. A live glass layer sitting in
+   normal flow when showModal() inserts the dialog into the top layer
+   forces the compositor to re-sort and re-rasterize the backdrop root
+   around that insertion — the open-frame flicker again. Rendering the
+   element only from `showing` onward means it materializes in the same
+   style pass as showModal(), so there is one build instead of a re-sort.
+
+   The opacity transition is unaffected: `showing` renders the element at
+   opacity 0 and two frames pass before the flip to `shown`. This is the
+   same display:none -> transition dance the <dialog> itself already
+   performs at showModal(). It also gives the element a first-render
+   moment, so @starting-style works on it if a consumer wants one.
+
+   `will-change: opacity` belongs on the base rule, not scoped to the
+   animating states. Scoping it there would add the hint on the open
+   frame — #setState('showing') and showModal() run in the SAME task —
+   forcing a full-viewport layer promotion at exactly the moment being
+   kept quiet. On the base rule it is free while `display: none` (a
+   non-rendered element holds no compositor layer) and already present
+   on the first rendered frame. */
 dialog-backdrop {
+	display: none;
 	position: fixed;
 	background: rgba(0, 0, 0, 0.3);
 	opacity: 0;
 	transition: opacity 0.3s ease-out;
 	pointer-events: none;
+	will-change: opacity;
 	z-index: var(--dialog-backdrop-z-index, 1000);
 	top: 50%;
 	left: 50%;
 	width: 200vw;
 	height: 200dvh;
 	transform: translateY(-50%) translateX(-50%);
+}
+
+/* Rendered only while the panel is open or animating. Keyed off the
+   panel's own state, so a hand-authored <dialog-backdrop> stays
+   non-rendering between parse and custom-element upgrade too. */
+dialog-panel[state='showing'] > dialog-backdrop,
+dialog-panel[state='shown'] > dialog-backdrop,
+dialog-panel[state='hiding'] > dialog-backdrop {
+	display: block;
 }
 
 /* Showing state - dialog is open but still at initial values
@@ -74,20 +125,10 @@ dialog-panel[state='showing'] > dialog {
 	transform: scale(0.95);
 }
 
-dialog-panel:not(:has(dialog-backdrop))[state='showing']
-	> dialog::backdrop {
-	opacity: 0;
-}
-
 /* Shown state - fully visible (animates from showing → shown) */
 dialog-panel[state='shown'] > dialog {
 	opacity: 1;
 	transform: scale(1);
-}
-
-dialog-panel:not(:has(dialog-backdrop))[state='shown']
-	> dialog::backdrop {
-	opacity: 1;
 }
 
 /* Hiding state - faster exit animation */
@@ -97,12 +138,6 @@ dialog-panel[state='hiding'] > dialog {
 	transition:
 		opacity 0.2s ease-in,
 		transform 0.2s ease-in;
-}
-
-dialog-panel:not(:has(dialog-backdrop))[state='hiding']
-	> dialog::backdrop {
-	opacity: 0;
-	transition: opacity 0.2s ease-in;
 }
 
 /* dialog-backdrop state animations */
@@ -232,8 +267,21 @@ dialog-panel[morph][state] > dialog {
 	transition: none;
 }
 
-/* Bring in the scrim during the outbound morph flight */
+/* Bring in the scrim during the outbound morph flight. Unlike the CSS
+   path — which holds opacity 0 through `showing` and fades on the flip
+   to `shown` — the morph path paints the scrim at full opacity in
+   `showing` itself, because promotion to `shown` waits for the spring
+   to settle. That makes `showing` both the first rendered frame and
+   the opacity-1 frame, so a transition alone has nothing to start
+   from; @starting-style supplies the missing first-frame value. Where
+   unsupported the scrim appears instantly, which was the old behavior. */
 dialog-panel[morph][state='showing'] > dialog-backdrop {
 	opacity: 1;
 	pointer-events: auto;
+}
+
+@starting-style {
+	dialog-panel[morph][state='showing'] > dialog-backdrop {
+		opacity: 0;
+	}
 }
