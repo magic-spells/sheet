@@ -208,9 +208,16 @@ function installDomStubs() {
 	globalThis.getComputedStyle = (element) => ({
 		borderRadius: '0px',
 		direction: 'ltr',
+		// The trigger usability probe reads these three. A DOM-free stub has no
+		// cascade, so the inline value is the only style there is — which is also
+		// what MorphEngine writes when it takes ownership of a trigger, so the
+		// probe's blob-ownership gate is genuinely exercised here.
+		display: element.style.display || 'block',
 		fontSize: '16px',
+		opacity: element.style.opacity || '1',
 		overflowX: 'visible',
 		overflowY: 'visible',
+		visibility: element.style.visibility || 'visible',
 		getPropertyValue: (name) => element.style.getPropertyValue(name),
 	});
 

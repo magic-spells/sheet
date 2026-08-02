@@ -19,6 +19,7 @@ class MorphEngine {
 	constructor(options = {}) {
 		this.zIndex = options.zIndex ?? 9999;
 		this.lockScroll = options.lockScroll ?? true;
+		this.cloneContents = options.cloneContents ?? true;
 		this.attraction = options.attraction ?? 0.1;
 		this.friction = options.friction ?? 0.32;
 		MorphEngine.instances.push(this);
@@ -65,7 +66,7 @@ class MorphEngine {
 		this.#target = to;
 		this.#save(from);
 		this.#save(to);
-		this.runs.push({ phase: 'showing', from, to });
+		this.runs.push({ phase: 'showing', from, to, cloneContents: this.cloneContents });
 		this.#start(from, to, 'showing');
 		return Promise.resolve(true);
 	}
@@ -77,7 +78,12 @@ class MorphEngine {
 			this.#state = 'hiding';
 			return Promise.resolve(true);
 		}
-		this.runs.push({ phase: 'hiding', from: this.#target, to: this.#source });
+		this.runs.push({
+			phase: 'hiding',
+			from: this.#target,
+			to: this.#source,
+			cloneContents: this.cloneContents,
+		});
 		this.#start(this.#target, this.#source, 'hiding');
 		return Promise.resolve(true);
 	}

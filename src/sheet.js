@@ -75,6 +75,27 @@ function scrollsOnAxis(element, axis) {
 }
 
 /**
+ * Whether an element is visible enough to be morphed out of.
+ *
+ * MorphEngine's blob clones the trigger's subtree and forces visibility,
+ * display and opacity back on to render it, so a trigger the page deliberately
+ * hid would have its content flashed across the flight. Refusing the box here
+ * is what routes such a trigger back to the ordinary spring entrance.
+ *
+ * `display: none` is checked even though a display:none box already measures
+ * zero: MorphEngine flips the element on for one synchronous read, so the
+ * intent is worth stating rather than leaning on the measurement.
+ * @param {Element} element - Candidate trigger.
+ * @returns {boolean} True when the page is actually showing it.
+ */
+function triggerIsVisible(element) {
+	const style = getComputedStyle(element);
+	if (style.visibility === 'hidden' || style.display === 'none') return false;
+	const opacity = Number.parseFloat(style.opacity);
+	return !(Number.isFinite(opacity) && opacity === 0);
+}
+
+/**
  * Inline properties the profile morph owns while it runs.
  *
  * Every one is written in explicit pixels so the transition has something
@@ -152,6 +173,8 @@ class SheetPanel extends HTMLElement {
 	#snaps = [];
 	#drag = { active: false };
 	#morph = null;
+	#morphInline = null;
+	#proxyRevealed = false;
 	#pendingProfile = null;
 	#contentObserver = null;
 	#contentRemeasureTimer = null;
@@ -193,6 +216,9 @@ class SheetPanel extends HTMLElement {
 		const _ = this;
 		_.#handlers = {
 			beforeShow: () => {
+				// Reset before the run starts; a reversal's synchronous reveal
+				// re-emit lands after this and re-marks the promotion it performs.
+				_.#proxyRevealed = false;
 				if (_.#engine?.state !== 'hiding') _.#setProgress(0);
 				_.#prepareOpen();
 			},
@@ -200,6 +226,10 @@ class SheetPanel extends HTMLElement {
 				// Covers every route out: gesture dismissal, close button,
 				// Escape, backdrop click, or a programmatic hide().
 				_.#drag = { active: false };
+				// A morph still in flight has to be abandoned here too, or its
+				// pinned box would outlive the panel and fight the exit animation
+				// the engine is about to run.
+				_.#finishMorph();
 			},
 			shown: () => {
 				_.#setProgress(1);
@@ -213,6 +243,13 @@ class SheetPanel extends HTMLElement {
 			},
 			hidden: () => {
 				_.#drag = { active: false };
+				_.#proxyRevealed = false;
+				// The force-close paths (stop(), a native close repair) emit no
+				// beforeHide, so this is the only hook that can clear a #waitForMorph
+				// timer they stranded — left armed, it fires up to duration + padding
+				// later and writes the snapshot onto a subsequent live run. A normal
+				// hide already finished the morph at beforeHide, making this a no-op.
+				_.#finishMorph();
 				_.#setProgress(0);
 				_.#syncContentObserver();
 			},
@@ -241,6 +278,52 @@ class SheetPanel extends HTMLElement {
 					event.clientY < rect.top ||
 					event.clientY > rect.bottom;
 				if (outside) event.stopPropagation();
+			},
+			// A native close — <form method="dialog"> or app-level dialog.close() —
+			// landing between the proxy reveal and the blob settle reaches neither of
+			// dialog-panel's force-close guards: animatesDialog is false for the proxy
+			// run and engine paths never arm #pendingRAF. Left alone, the blob's shown
+			// handler re-opens the dialog the user explicitly closed. stop() is the
+			// sanctioned force-close path: it kills the blob and forwards its own
+			// terminal 'stop', which dialog-panel finalizes from.
+			//
+			// The repair is scoped to the FORWARD flight ('showing'), and that gate
+			// is load-bearing, not defensive: dialog-panel's own proxy-hide
+			// choreography demotes the dialog at hide-START — the blob flies in
+			// normal flow, and a top-layer dialog would paint over it — so every
+			// deliberate reverse close delivers a queued close event mid-flight
+			// with the dialog closed. Reacting to it stopped the blob dead and the
+			// panel vanished instead of morphing back. dialog.open is the second
+			// guard: a hide reversed back to show re-promotes at its reveal
+			// re-emit, so the reversed hide's queued close lands open and is
+			// ignored even before the state check.
+			//
+			// #proxyRevealed is the staleness token, mirroring dialog-panel's
+			// #pendingRAF trick: a force-close only exists AFTER this run's reveal
+			// promoted the dialog. A direct or force close leaves the dialog open
+			// until finalize, whose dialog.close() QUEUES a close event — so a
+			// hidden listener that reopens a trigger morph in the same task puts
+			// the new flight into exactly the state the other guards describe
+			// ('showing', blob up, dialog not yet open) before the stale event
+			// lands. beforeShow resets the token; only this run's reveal sets it.
+			close: () => {
+				const dialog = _.#dialogRef;
+				const engine = _.#engine;
+				if (
+					dialog &&
+					!dialog.open &&
+					_.#proxyRevealed &&
+					engine?.state === 'showing' &&
+					engine.blobFlight
+				) {
+					engine.stop();
+				}
+			},
+			// Only a proxy run emits reveal — a direct spring needs none — so this
+			// marks exactly "the current flight has promoted the dialog", which is
+			// the precondition for the close handler's force-close repair.
+			reveal: () => {
+				_.#proxyRevealed = true;
 			},
 			resize: throttle(() => _.#handleResize(), RESIZE_THROTTLE_MS),
 			change: ({ progress, backdropProgress, phase }) =>
@@ -320,6 +403,7 @@ class SheetPanel extends HTMLElement {
 		});
 		_.#engine.on('snapchange', _.#handlers.snapchange);
 		_.#engine.on('change', _.#handlers.change);
+		_.#engine.on('reveal', _.#handlers.reveal);
 		_.#syncSpring();
 		_.setAttribute('engine', '');
 
@@ -336,6 +420,7 @@ class SheetPanel extends HTMLElement {
 			// bubble-phase handler on the dialog.
 			_.#panelRef.addEventListener('click', _.#handlers.outsideGuard, true);
 		}
+		_.#dialogRef?.addEventListener('close', _.#handlers.close);
 
 		// `cancel` does not bubble and dialog-panel listens for it on the dialog
 		// itself, so the capture phase on the way DOWN to the dialog is the only
@@ -378,7 +463,8 @@ class SheetPanel extends HTMLElement {
 		_.#contentObserver = null;
 		clearTimeout(_.#contentRemeasureTimer);
 		_.#contentRemeasureTimer = null;
-		if (_.#dialogRef) _.#stripMorphPins(_.#dialogRef);
+		_.#releaseMorphPins();
+		_.#dialogRef?.removeEventListener('close', _.#handlers.close);
 
 		for (const gesture of _.#gestures) gesture.destroy();
 		_.#gestures = [];
@@ -402,6 +488,7 @@ class SheetPanel extends HTMLElement {
 
 		_.#engine?.off('change', _.#handlers.change);
 		_.#engine?.off('snapchange', _.#handlers.snapchange);
+		_.#engine?.off('reveal', _.#handlers.reveal);
 		// Destroy before unwiring the transport: destroy() emits 'stop', and
 		// dialog-panel has to still be listening — that event is what closes an
 		// open dialog, emits its `hidden`, and returns focus. Unwiring first
@@ -437,7 +524,8 @@ class SheetPanel extends HTMLElement {
 		// bit is read by dialog-panel before beforeShow, so every gate — opt-in,
 		// usable viewport box, and reduced-motion duration — has to resolve here,
 		// before delegation. A failed arm during a live spring reversal deliberately
-		// leaves that reversal direct; it can never create a later phantom reverse.
+		// leaves that reversal direct, and a vetoed show disarms a hidden engine so
+		// it can never create a later phantom reverse.
 		const morph =
 			_.morphsFromTrigger &&
 			!!triggerEl &&
@@ -445,7 +533,9 @@ class SheetPanel extends HTMLElement {
 			_.#morphDuration(dialog) > 0 &&
 			!!_.#usableTriggerBox(triggerEl);
 		if (morph) _.#engine?.armMorph(triggerEl, { zIndex: _.#blobZIndex() });
-		return _.panel?.show(triggerEl);
+		const result = _.panel?.show(triggerEl);
+		if (morph && !result) _.#engine?.disarmMorph();
+		return result;
 	}
 
 	/**
@@ -734,6 +824,15 @@ class SheetPanel extends HTMLElement {
 	 */
 	get morphsFromTrigger() {
 		return this.hasAttribute('morph-trigger');
+	}
+
+	/**
+	 * Opts the sheet into growing out of the trigger passed to `show()`.
+	 * @param {boolean} value - True to set `morph-trigger`, false to remove it.
+	 */
+	set morphsFromTrigger(value) {
+		if (value) this.setAttribute('morph-trigger', '');
+		else this.removeAttribute('morph-trigger');
 	}
 
 	/** @returns {number} Largest viewport width where opening is allowed. */
@@ -1430,8 +1529,19 @@ class SheetPanel extends HTMLElement {
 	}
 
 	#usableTriggerBox(trigger) {
+		const _ = this;
 		if (!(trigger instanceof Element) || !trigger.isConnected) return null;
-		const box = this.#readBox(trigger);
+		// Visibility is only readable while the engine is hidden, and that is
+		// exactly the arm moment. From the launch onward MorphEngine owns the
+		// trigger's visibility, display and opacity — it hides the source for the
+		// whole flight and keeps it hidden for as long as the panel is shown — so
+		// a hidden trigger read on the hide path is the morph's own doing and says
+		// nothing about what the page wants. Checking it there would refuse every
+		// reverse morph. The remaining gates below are geometry, which the blob
+		// does not touch, so a trigger that detaches or scrolls away while the
+		// sheet is open still falls back to the direct spring exit.
+		if ((_.#engine?.state ?? 'hidden') === 'hidden' && !triggerIsVisible(trigger)) return null;
+		const box = _.#readBox(trigger);
 		if (box.width <= 0 || box.height <= 0) return null;
 		if (
 			box.left >= window.innerWidth ||
@@ -1513,6 +1623,32 @@ class SheetPanel extends HTMLElement {
 			return;
 		}
 
+		// Snapshot the consumer's own inline geometry once per FLIP, before any
+		// pin is written. Stripping used to blank these outright, which erased
+		// styles the component never owned — a consumer's inline `height` or
+		// `margin` is indistinguishable from a pin once both are inline.
+		//
+		// The `null` guard is the re-entrant case and is load-bearing: a window
+		// edge dragged back and forth re-enters here with the previous FLIP's pins
+		// still on the element, and re-snapshotting would promote that scaffolding
+		// to "what the consumer had". The snapshot therefore survives every
+		// retarget and is released only where a strip actually runs.
+		if (_.#morphInline === null) {
+			// `height` is the one property on the list the ENGINE also writes
+			// inline, and only for a snap-resized bottom sheet. That painted value
+			// is not the consumer's, and restoring it would pin the incoming
+			// profile — which paints no height at all — to the outgoing one's snap,
+			// exactly the stale-survivor the blanking teardown existed to prevent.
+			// A consumer's own inline height on such a profile is already overwritten
+			// every frame, so there is nothing here to lose.
+			const engineOwnsHeight = _.#profile ? resizesWithSnaps(_.#profile) : false;
+			_.#morphInline = {};
+			for (const property of MORPH_PROPERTIES) {
+				const owned = engineOwnsHeight && property === 'height';
+				_.#morphInline[property] = owned ? '' : (dialog.style[property] ?? '');
+			}
+		}
+
 		// Always read rather than remember. Mid-transition getBoundingClientRect
 		// reports the animated value, so a retarget starts from exactly where the
 		// panel is right now.
@@ -1558,7 +1694,10 @@ class SheetPanel extends HTMLElement {
 	#finishMorph() {
 		const _ = this;
 		_.#clearMorphTimers();
-		if (_.#dialogRef) _.#stripMorphPins(_.#dialogRef);
+		// The single site that ends a FLIP: normal completion, the safety timeout,
+		// a zero morph duration, and the close interruption from beforeHide all
+		// arrive here, so this is the one place the snapshot may be released.
+		_.#releaseMorphPins();
 		if (!_.#engine?.morphing) return;
 		_.#engine?.endMorph();
 		_.#setProgress(1, 1);
@@ -1607,8 +1746,39 @@ class SheetPanel extends HTMLElement {
 		});
 	}
 
+	/**
+	 * Unpins the dialog back to whatever inline geometry the consumer had.
+	 *
+	 * Restores rather than blanks: the pins are written onto the same inline
+	 * properties a consumer may already have set, so blanking them silently
+	 * deleted the consumer's styles at the end of every profile morph. With no
+	 * snapshot taken — teardown before any morph ran — blanking is still the
+	 * right answer, since only a pin could have put a value there.
+	 *
+	 * Deliberately does NOT clear the snapshot: #morphToProfile strips mid-FLIP
+	 * to measure the destination box against the consumer's real geometry, and
+	 * the same snapshot has to survive to the strip that ends the run.
+	 * @param {HTMLElement} dialog - Dialog to unpin.
+	 */
 	#stripMorphPins(dialog) {
-		for (const property of MORPH_PROPERTIES) dialog.style[property] = '';
+		const saved = this.#morphInline;
+		for (const property of MORPH_PROPERTIES) dialog.style[property] = saved?.[property] ?? '';
+	}
+
+	/**
+	 * Unpins and releases the snapshot — every path that ends a FLIP.
+	 *
+	 * A null snapshot means no FLIP ever pinned: #pinBox and the inline
+	 * transition are both downstream of the snapshot block, so there is nothing
+	 * to strip and the write would only blank inline styles the consumer owns.
+	 * #finishMorph runs on every beforeHide and hidden, morph or not, which is
+	 * exactly how often that blank used to land.
+	 */
+	#releaseMorphPins() {
+		const _ = this;
+		if (_.#morphInline === null) return;
+		if (_.#dialogRef) _.#stripMorphPins(_.#dialogRef);
+		_.#morphInline = null;
 	}
 
 	/**

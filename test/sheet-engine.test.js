@@ -965,6 +965,199 @@ test('beginMorph refuses and endMorph stays inert during a blob flight', () => {
 	engine.destroy();
 });
 
+test('endMorph during a reverse blob flight releases only the profile park', () => {
+	MorphEngine.instances.length = 0;
+	const engine = makeEngine();
+	const trigger = new StubElement('button');
+	const dialog = new StubElement('dialog');
+	engine.armMorph(trigger);
+	void engine.show({ to: dialog });
+	const blob = MorphEngine.instances.at(-1);
+	blob.step(1);
+	assert.equal(engine.beginMorph(), true);
+	dialog.style.transform = 'host-profile-pin';
+
+	void engine.hide();
+	assert.equal(engine.blobFlight, true);
+	engine.endMorph();
+
+	assert.equal(engine.morphing, false);
+	assert.equal(engine.blobFlight, true);
+	assert.equal(dialog.style.transform, 'host-profile-pin');
+	blob.step(1);
+	assert.equal(engine.state, 'hidden');
+	engine.destroy();
+});
+
+test('closing during a profile morph resets both transports before an immediate reopen', async (t) => {
+	for (const transport of ['direct', 'trigger']) {
+		const frames = captureFrames(t);
+		MorphEngine.instances.length = 0;
+		const engine = makeEngine();
+		const dialog = new StubElement('dialog');
+		let blob;
+
+		if (transport === 'trigger') {
+			const trigger = new StubElement('button');
+			engine.armMorph(trigger);
+			void engine.show({ to: dialog });
+			blob = MorphEngine.instances.at(-1);
+			blob.step(1);
+		} else {
+			const shown = engine.show({ to: dialog });
+			drainFrames(frames);
+			await shown;
+		}
+
+		assert.equal(engine.beginMorph(), true, `${transport} profile morph starts`);
+		let hidden;
+		if (transport === 'trigger') {
+			hidden = engine.hide();
+			engine.endMorph();
+			blob.step(1);
+		} else {
+			engine.endMorph();
+			hidden = engine.hide();
+			drainFrames(frames);
+		}
+		await hidden;
+
+		assert.equal(engine.state, 'hidden', `${transport} close lands hidden`);
+		assert.equal(engine.morphing, false, `${transport} close releases the profile park`);
+		const reopened = engine.show({ to: dialog });
+		assert.equal(
+			dialog.style.transform,
+			'translate3d(0px, 528px, 0px) scale(1)',
+			`${transport} reopen paints its p = 0 frame`
+		);
+		drainFrames(frames);
+		await reopened;
+		engine.destroy();
+	}
+});
+
+test('stop clears a stranded morph after the blob already hid', () => {
+	MorphEngine.instances.length = 0;
+	const engine = makeEngine();
+	const trigger = new StubElement('button');
+	const dialog = new StubElement('dialog');
+	engine.armMorph(trigger);
+	void engine.show({ to: dialog });
+	const blob = MorphEngine.instances.at(-1);
+	blob.step(1);
+	assert.equal(engine.beginMorph(), true);
+	void engine.hide();
+	blob.step(1);
+
+	assert.equal(engine.state, 'hidden');
+	assert.equal(engine.morphing, true);
+	engine.stop();
+	assert.equal(engine.morphing, false);
+	engine.destroy();
+});
+
+test('reverse blob close supersedes settle and return springs', async (t) => {
+	for (const kind of ['settleTo', 'returnToRest']) {
+		const frames = captureFrames(t);
+		MorphEngine.instances.length = 0;
+		const engine = new SheetEngine();
+		const dialog = new StubElement('dialog');
+		const writesAfterHidden = [];
+		let trackWrites = false;
+		dialog.style = new Proxy(dialog.style, {
+			set(target, property, value) {
+				if (trackWrites) writesAfterHidden.push([property, value]);
+				target[property] = value;
+				return true;
+			},
+		});
+		if (kind === 'settleTo') {
+			engine.setProfile(profileFor('bottom'));
+			engine.setSnaps([200, 500], 1);
+		} else {
+			engine.setProfile(profileFor('right'));
+			engine.setSnaps([500], 0);
+		}
+		const trigger = new StubElement('button');
+		engine.armMorph(trigger);
+		void engine.show({ to: dialog });
+		const blob = MorphEngine.instances.at(-1);
+		blob.step(1);
+		engine.dragBy(120);
+
+		const phases = [];
+		const snapchanges = [];
+		engine.on('change', ({ phase }) => phases.push(phase));
+		engine.on('snapchange', (detail) => snapchanges.push(detail));
+		engine.on('hidden', () => {
+			trackWrites = true;
+		});
+		const settling = kind === 'settleTo' ? engine.settleTo(0, -1.5) : engine.returnToRest(1.5);
+		for (let index = 0; index < 3; index++) frames.shift()(index * 16.66);
+
+		void engine.hide();
+		blob.step(1);
+		drainFrames(frames);
+		await settling;
+
+		assert.equal(engine.state, 'hidden', kind);
+		assert.equal(phases.at(-1), 'hidden', kind);
+		assert.deepEqual(snapchanges, [], kind);
+		assert.deepEqual(writesAfterHidden, [], kind);
+		assert.deepEqual(
+			{
+				display: dialog.style.getPropertyValue('display'),
+				height: dialog.style.getPropertyValue('height'),
+				transform: dialog.style.getPropertyValue('transform'),
+			},
+			{ display: '', height: '', transform: '' },
+			kind
+		);
+		trackWrites = false;
+		engine.destroy();
+	}
+});
+
+test('reversing a blob close drops the cancelled snap and lands at rest', async (t) => {
+	const frames = captureFrames(t);
+	MorphEngine.instances.length = 0;
+	const engine = makeEngine();
+	const trigger = new StubElement('button');
+	const dialog = new StubElement('dialog');
+	engine.armMorph(trigger);
+	void engine.show({ to: dialog });
+	const blob = MorphEngine.instances.at(-1);
+	blob.step(1);
+	engine.dragBy(120);
+	const settling = engine.settleTo(0, -1.5);
+	for (let index = 0; index < 3; index++) frames.shift()(index * 16.66);
+
+	void engine.hide();
+	blob.step(0.4);
+	void engine.show({ to: dialog });
+	blob.step(0);
+	drainFrames(frames);
+	await settling;
+
+	assert.deepEqual(
+		{
+			activeSnap: engine.activeSnap,
+			currentSize: engine.currentSize,
+			height: dialog.style.height,
+			state: engine.state,
+			transform: dialog.style.transform,
+		},
+		{
+			activeSnap: 1,
+			currentSize: 500,
+			height: '500px',
+			state: 'shown',
+			transform: 'translate3d(0px, 0px, 0px) scale(1)',
+		}
+	);
+	engine.destroy();
+});
+
 test('snap velocity scales against the signed segment the settle must cross', () => {
 	// The spring always runs 0 -> TRAVEL, so a release velocity is only
 	// meaningful as a share of the pixel distance THAT run covers. For a snap

@@ -1209,6 +1209,17 @@ class SheetEngine extends EventEmitter {
 		return true;
 	}
 
+	/**
+	 * Clears an armed trigger morph that was never consumed — a vetoed
+	 * beforeShow leaves the arm set with the engine still hidden, which would
+	 * misclassify every later run as proxy. Refuses outside 'hidden' so a live
+	 * reversal's trigger is never stripped mid-flight.
+	 */
+	disarmMorph() {
+		if (this.#state !== 'hidden') return;
+		this.#morphTrigger = null;
+	}
+
 	/** Selects the direct spring exit for the next gesture-driven hide. */
 	armGestureExit() {
 		this.#gestureExit = true;
@@ -1283,12 +1294,14 @@ class SheetEngine extends EventEmitter {
 	 */
 	endMorph() {
 		const _ = this;
-		if (!_.#morphing || _.blobFlight) return;
+		if (!_.#morphing) return;
 		_.#morphing = false;
 		_.#phase = _.#state === 'shown' ? 'shown' : _.#phase;
 		_.#currentSize = _.#restSize();
 		_.#p = 1;
-		if (_.#dialog && _.#state === 'shown') {
+		// A blob owns every dialog style until its terminal event, so the profile
+		// morph releases its own park without painting over the flight.
+		if (_.#dialog && _.#state === 'shown' && !_.blobFlight) {
 			_.#frames = _.#makeOpenFrames(_.#currentSize);
 			_.#applyFrame(1);
 		}
@@ -1365,6 +1378,9 @@ class SheetEngine extends EventEmitter {
 				_.#backdropProgress = 0;
 				_.#blobTo = 'dialog';
 				_.#tuneBlob('morph');
+				// The trigger's content is small and its dissolve is the effect, so the
+				// forward blob keeps the source snapshot MorphEngine normally builds.
+				_.#blobEngine.cloneContents = true;
 				return _.#blobEngine.show({
 					from: _.#morphTrigger,
 					to: _.#dialog,
@@ -1430,9 +1446,20 @@ class SheetEngine extends EventEmitter {
 		_.#pendingDismissVelocity = 0;
 
 		if (_.#morphTrigger && _.#blobEngine && !_.#gestureExit && _.#triggerProbe(_.#morphTrigger)) {
-			if (_.#state === 'shown') _.#blobTo = 'trigger';
+			if (_.#state === 'shown') {
+				_.#blobTo = 'trigger';
+				// The dialog is live application state: cloning its subtree under body
+				// would re-run custom element lifecycles and duplicate document IDs.
+				_.#blobEngine.cloneContents = false;
+			}
 			_.#state = 'hiding';
 			_.#phase = 'hiding';
+			// A snap or return settle still in flight would outlive this hide: the blob
+			// parks #applyFrame, but the spring keeps running and repaints the closed
+			// dialog the moment the flight ends. Supersede it — the painted pose is
+			// already live in #currentSize, and PhysicsEngine resolves the old promise.
+			_.#settleAction = null;
+			if (_.#spring.isAnimating) _.#spring.stop();
 			_.#tuneBlob('morphBack');
 			return _.#blobEngine.hide();
 		}
@@ -1628,12 +1655,6 @@ class SheetEngine extends EventEmitter {
 		_.#blobTo = null;
 		_.#morphTrigger = null;
 		_.#gestureExit = false;
-		if (_.#state === 'hidden') return;
-		if (_.#spring.isAnimating) _.#spring.stop();
-		_.#state = 'hidden';
-		_.#phase = 'hidden';
-		_.#p = 0;
-		_.#settleAction = null;
 		// Both of these are terminal state that only #applyFrame would otherwise
 		// clear, and stop() never paints a frame. dialog-panel calls this on its
 		// force-close repair path — a `<form method="dialog">` submit or an
@@ -1648,6 +1669,12 @@ class SheetEngine extends EventEmitter {
 		// Math.max, so a reopened sheet pops to the scrim it was stopped under.
 		_.#morphing = false;
 		_.#flightPhase = null;
+		if (_.#state === 'hidden') return;
+		if (_.#spring.isAnimating) _.#spring.stop();
+		_.#state = 'hidden';
+		_.#phase = 'hidden';
+		_.#p = 0;
+		_.#settleAction = null;
 		_.#restoreInline();
 		_.emit('stop', { progress: 0 });
 	}

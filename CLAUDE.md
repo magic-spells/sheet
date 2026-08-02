@@ -58,11 +58,17 @@ off(name, listener)
 
 | initiator | transport selected by `animatesDialog` |
 | --- | --- |
-| `sheet.show(trigger)` with `morph-trigger`, a usable trigger, and a non-zero morph duration | proxy blob (`false`) |
+| `sheet.show(trigger)` with `morph-trigger`, a usable trigger, and a non-zero `--sheet-morph-duration` | proxy blob (`false`) |
 | `panel.show()` called directly, or any show with no armed morph | direct spring (`true`) |
 | close button, Escape, backdrop, or programmatic `hide()` while a usable trigger morph is live | proxy reverse (`false`) |
 | swipe dismissal after `armGestureExit()` | direct spring exit (`true`) |
 | deliberate close after the trigger has detached or left the viewport | direct spring exit (`true`) |
+
+`--sheet-morph-duration` does double duty in that first row: it is the *profile*-morph
+duration, and it is also the trigger morph's on/off switch. `prefers-reduced-motion` zeroes
+it, which is the whole reduced-motion policy — both morphs go, and the ordinary spring
+entrance and exit stay. Read once in `SheetPanel.show()`, alongside the other arm gates, so
+reduced motion needs no second switch in JS.
 
 dialog-panel reads `direct` at the **top** of `show()` and `hide()`, before it emits `beforeShow` or `beforeHide`. That ordering is load-bearing: the initiator must arm the transport before delegating to the panel, and nothing inside either lifecycle handler may try to change the mode. Doing it there is already too late — dialog-panel has chosen when to promote or demote the native dialog — and leaves the engine and panel following different ownership rules for the same run. `SheetPanel.show()` is therefore the one trigger-morph classification point, and the gesture release arms its direct exit before it calls `panel.hide()`.
 
@@ -89,6 +95,24 @@ Never put `display:flex` on the closed base dialog. A closed dialog must retain 
 ## Trigger Morph
 
 A trigger flight has exactly two geometry owners, never two writers on one element. MorphEngine owns the dialog's inline styles from the instant the blob is launched through its inner `shown` or `hidden`; SheetEngine parks for that whole window and paints nothing. The handoff on open happens only after the inner `shown`, when MorphEngine has finished restoring its target snapshot: SheetEngine then builds the resting track and paints `p = 1`. Painting even SheetEngine's hidden `p = 0` frame before launch would put that frame into MorphEngine's snapshot, and MorphEngine would restore it over the settled panel at the handoff — the blob would arrive correctly and the real dialog would jump back off screen.
+
+### "Usable" is a geometry question, plus one the blob has already answered
+
+`#usableTriggerBox` is both the arm gate in `SheetPanel.show()` and the engine's
+`triggerProbe` on the hide path. It refuses a detached trigger, a zero-size one, one wholly
+outside the viewport, and — **only while the engine is `hidden`** — one the page has hidden
+with `visibility`, `display: none`, or `opacity: 0`. The blob renders a *clone* with those
+forced back on, so morphing out of a hidden trigger would flash content the page meant to
+hide.
+
+The state gate on that last check is not defensive; it is the difference between working and
+refusing every reverse morph. MorphEngine hides the source element for the whole flight and
+keeps it `visibility: hidden` for as long as the panel is shown, so from the launch onward
+the hidden style *on the trigger is the morph's own* and says nothing about the page's
+intent. `hidden` is the only moment the answer is honest, and it is the moment that decides
+whether the flight happens at all. Geometry is unaffected — the blob moves nothing — so a
+trigger that detaches or scrolls away while the sheet is open still falls back to the direct
+spring exit.
 
 The inner engine's `stop` event is deliberately swallowed. `#releaseBlob()` uses `blob.stop()` as a transport handoff for a swipe dismissal, not as a request to close the dialog; forwarding that event would make dialog-panel finalize and demote the dialog in the middle of the swipe release, just before SheetEngine starts the direct exit. Only `SheetEngine.stop()` forwards its own terminal `stop`, because that is the actual force-close path.
 
@@ -837,12 +861,31 @@ transitioning those directly **snaps**. (`interpolate-size: allow-keywords` fixe
 case, and only in Chromium.) The order matters and is the whole trick:
 
 1. `engine.beginMorph()` — spring stops, `#applyFrame` goes inert, gestures refuse.
-2. Read the live box.
-3. `#prepareOpen()` — hand the new profile to CSS and re-measure snaps.
-4. Read the destination box. **The pins must be off for this**, or it measures the scaffolding.
-5. Pin back to the first box in explicit pixels, force layout.
-6. Set the transition, write the second box.
-7. On `transitionend` — strip every pin, `engine.endMorph()`.
+2. Snapshot the dialog's inline `MORPH_PROPERTIES` — see the restore rule below.
+3. Read the live box.
+4. `#prepareOpen()` — hand the new profile to CSS and re-measure snaps.
+5. Read the destination box. **The pins must be off for this**, or it measures the scaffolding.
+6. Pin back to the first box in explicit pixels, force layout.
+7. Set the transition, write the second box.
+8. On `transitionend` — restore the snapshot, `engine.endMorph()`.
+
+**Unpinning restores; it does not blank.** The pins are written onto the same inline
+properties a consumer may already have set, and once both are inline they are
+indistinguishable — so blanking the list on teardown silently deleted styles the component
+never owned. `#stripMorphPins` restores the snapshot instead, and step 5 uses that same
+restore so the destination is measured against the consumer's real geometry rather than a
+blanked box.
+
+Two rules keep the snapshot honest. **A re-entrant morph must not re-snapshot**: it arrives
+with the previous FLIP's pins still on the element, and re-reading them would promote the
+scaffolding to "what the consumer had" permanently. The snapshot therefore survives every
+retarget and is released only by `#finishMorph` — the single strip site, reached by
+completion, the safety timeout, a zero duration, and `beforeHide`'s abandon — plus
+`disconnectedCallback`, which shares `#releaseMorphPins`. And **`height` is excluded when
+the outgoing profile is snap-resized**: it is the one property on the list the *engine* also
+writes inline, so that value is a painted snap rather than a consumer style, and restoring
+it would pin the incoming profile — which paints no height at all — to the snap it just
+left.
 
 `transform` and `opacity` stay at their rest values throughout so they never fight the pinned box.
 `beginMorph` lands the panel at rest in the *current* profile first: a resize arriving mid-drag

@@ -71,6 +71,18 @@ function makeSheet({ morphTrigger = false } = {}) {
 	};
 	panel.isOpen = false;
 	panel.hide = () => true;
+	dialog.open = false;
+	dialog.returnValue = '';
+	dialog.showModalCalls = 0;
+	dialog.showModal = () => {
+		dialog.open = true;
+		dialog.showModalCalls++;
+	};
+	dialog.close = (result) => {
+		if (result !== undefined) dialog.returnValue = result;
+		dialog.open = false;
+		queueMicrotask(() => dialog.fire('close'));
+	};
 	sheet.closestResults.set('dialog-panel', panel);
 	sheet.closestResults.set('dialog', dialog);
 	sheet.connectedCallback();
@@ -110,14 +122,40 @@ function makeTrigger() {
 	return trigger;
 }
 
+/**
+ * A trigger the page has hidden, by one of the three ways that matter.
+ *
+ * The box is deliberately left usable so the assertion is about the style check
+ * alone: a real `display: none` element would also measure zero, and leaning on
+ * that would leave the visibility and opacity cases untested.
+ * @param {string} property - Inline style property to set.
+ * @param {string} value - Value that makes the trigger invisible.
+ * @returns {Object} Trigger stub.
+ */
+function hiddenTrigger(property, value) {
+	const trigger = makeTrigger();
+	trigger.style[property] = value;
+	return trigger;
+}
+
 function wirePanelTransport({ dialog, engine, panel }) {
 	panel.showModes = [];
 	panel.hideModes = [];
+	panel.finalizes = 0;
+	const finalize = () => {
+		if (dialog.open) dialog.close();
+		panel.isOpen = false;
+		panel.finalizes++;
+		panel.fire('hidden');
+	};
 	panel.show = (trigger) => {
 		const direct = engine.animatesDialog;
 		panel.showModes.push(direct);
 		if (panel.fire('beforeShow').defaultPrevented) return false;
-		if (direct) panel.isOpen = true;
+		if (direct) {
+			panel.isOpen = true;
+			dialog.showModal();
+		}
 		void engine.show({ from: trigger, to: dialog, display: 'flex' });
 		return true;
 	};
@@ -125,21 +163,24 @@ function wirePanelTransport({ dialog, engine, panel }) {
 		const direct = engine.animatesDialog;
 		panel.hideModes.push(direct);
 		if (panel.fire('beforeHide').defaultPrevented) return false;
-		if (!direct) panel.isOpen = false;
+		if (!direct) {
+			panel.isOpen = false;
+			if (dialog.open) dialog.close();
+		}
 		void engine.hide();
 		return true;
 	};
 	engine.on('reveal', () => {
 		panel.isOpen = true;
+		if (!dialog.open) dialog.showModal();
 	});
 	engine.on('shown', () => {
 		panel.isOpen = true;
+		if (!dialog.open) dialog.showModal();
 		panel.fire('shown');
 	});
-	engine.on('hidden', () => {
-		panel.isOpen = false;
-		panel.fire('hidden');
-	});
+	engine.on('hidden', finalize);
+	engine.on('stop', finalize);
 }
 
 function makeMorphSheet(t) {
@@ -206,17 +247,31 @@ elementTest('each trigger-morph arming gate independently keeps the direct trans
 	const cases = [
 		['no morph-trigger attribute', {}, makeTrigger()],
 		['no trigger', { morphTrigger: true }, undefined],
-		['detached trigger', { morphTrigger: true }, Object.assign(makeTrigger(), { isConnected: false })],
+		[
+			'detached trigger',
+			{ morphTrigger: true },
+			Object.assign(makeTrigger(), { isConnected: false }),
+		],
 		[
 			'zero-size trigger',
 			{ morphTrigger: true },
-			Object.assign(makeTrigger(), { rect: { top: 20, left: 20, right: 20, bottom: 20, width: 0, height: 0 } }),
+			Object.assign(makeTrigger(), {
+				rect: { top: 20, left: 20, right: 20, bottom: 20, width: 0, height: 0 },
+			}),
 		],
 		[
 			'trigger outside the viewport',
 			{ morphTrigger: true },
-			Object.assign(makeTrigger(), { rect: { top: 900, left: 20, right: 68, bottom: 948, width: 48, height: 48 } }),
+			Object.assign(makeTrigger(), {
+				rect: { top: 900, left: 20, right: 68, bottom: 948, width: 48, height: 48 },
+			}),
 		],
+		// MorphEngine's blob clones the trigger's subtree and forces visibility,
+		// display and opacity back on to render it, so a trigger the page hid
+		// would have its content flashed across the flight.
+		['visibility:hidden trigger', { morphTrigger: true }, hiddenTrigger('visibility', 'hidden')],
+		['display:none trigger', { morphTrigger: true }, hiddenTrigger('display', 'none')],
+		['fully transparent trigger', { morphTrigger: true }, hiddenTrigger('opacity', '0')],
 	];
 
 	for (const [label, options, trigger] of cases) {
@@ -245,37 +300,114 @@ elementTest('each trigger-morph arming gate independently keeps the direct trans
 	sheet.disconnectedCallback();
 });
 
-elementTest('a trigger morph opens through one blob and hands the settled frame to SheetEngine', (t) => {
+elementTest(
+	'a trigger morph opens through one blob and hands the settled frame to SheetEngine',
+	(t) => {
+		const { dialog, engine, panel, sheet } = makeMorphSheet(t);
+		const trigger = makeTrigger();
+		const progress = [];
+		const reveals = [];
+		let shown = 0;
+		engine.on('change', ({ backdropProgress }) => progress.push(backdropProgress));
+		engine.on('reveal', (detail) => reveals.push(detail));
+		engine.on('shown', () => shown++);
+
+		sheet.show(trigger);
+		const blob = currentBlob();
+
+		assert.equal(engine.animatesDialog, false);
+		assert.equal(panel.showModes[0], false);
+		assert.equal(blob.runs.length, 1);
+		assert.equal(trigger.style.visibility, 'hidden');
+		assert.equal(dialog.style.transform ?? '', '', 'SheetEngine paints no transform mid-flight');
+		assert.equal(dialog.style.height ?? '', '', 'SheetEngine paints no height mid-flight');
+		assert.equal(blobsInBody().length, 1);
+
+		for (const p of [0.2, 0.5, 0.75, 1]) blob.step(p);
+		assert.ok(progress.every((value, index) => index === 0 || value >= progress[index - 1]));
+		assert.equal(reveals.length, 1);
+		assert.equal(reveals[0].to, dialog);
+		assert.equal(engine.state, 'shown');
+		assert.equal(panel.style['--sheet-progress'], '1.000');
+		assert.equal(dialog.style.transform, 'translate3d(0px, 0px, 0px) scale(1)');
+		assert.equal(dialog.style.height, '680px');
+		assert.equal(shown, 1);
+		assert.equal(blobsInBody().length, 0);
+	}
+);
+
+elementTest(
+	'a native close during proxy reveal stops and finalizes without reopening',
+	async (t) => {
+		const { dialog, engine, panel, sheet } = makeMorphSheet(t);
+		let hidden = 0;
+		panel.addEventListener('hidden', () => hidden++);
+		sheet.show(makeTrigger());
+		const blob = currentBlob();
+		blob.step(0.75);
+
+		assert.equal(dialog.open, true);
+		assert.equal(dialog.showModalCalls, 1);
+		dialog.close('result');
+		await Promise.resolve();
+
+		assert.equal(blob.stops, 1);
+		assert.equal(engine.state, 'hidden');
+		assert.equal(panel.finalizes, 1);
+		assert.equal(hidden, 1);
+		blob.step(1);
+		assert.equal(dialog.open, false);
+		assert.equal(dialog.showModalCalls, 1);
+		assert.equal(panel.finalizes, 1);
+		assert.equal(hidden, 1);
+		assert.equal(dialog.returnValue, 'result');
+	}
+);
+
+elementTest('a normal proxy entrance ignores close events while the dialog is open', (t) => {
+	const { dialog, engine, sheet } = makeMorphSheet(t);
+	sheet.show(makeTrigger());
+	const blob = currentBlob();
+	blob.step(0.75);
+
+	dialog.fire('close');
+	assert.equal(dialog.open, true);
+	assert.equal(blob.stops, 0);
+	assert.equal(engine.blobFlight, true);
+	blob.step(1);
+	assert.equal(engine.state, 'shown');
+});
+
+elementTest('a reversed proxy hide ignores its queued close after re-promotion', async (t) => {
 	const { dialog, engine, panel, sheet } = makeMorphSheet(t);
 	const trigger = makeTrigger();
-	const progress = [];
-	const reveals = [];
-	let shown = 0;
-	engine.on('change', ({ backdropProgress }) => progress.push(backdropProgress));
-	engine.on('reveal', (detail) => reveals.push(detail));
-	engine.on('shown', () => shown++);
-
 	sheet.show(trigger);
 	const blob = currentBlob();
+	blob.step(1);
 
-	assert.equal(engine.animatesDialog, false);
-	assert.equal(panel.showModes[0], false);
-	assert.equal(blob.runs.length, 1);
-	assert.equal(trigger.style.visibility, 'hidden');
-	assert.equal(dialog.style.transform ?? '', '', 'SheetEngine paints no transform mid-flight');
-	assert.equal(dialog.style.height ?? '', '', 'SheetEngine paints no height mid-flight');
-	assert.equal(blobsInBody().length, 1);
+	sheet.hide();
+	assert.equal(dialog.open, false);
+	sheet.show(trigger);
+	assert.equal(dialog.open, true);
+	await Promise.resolve();
 
-	for (const p of [0.2, 0.5, 0.75, 1]) blob.step(p);
-	assert.ok(progress.every((value, index) => index === 0 || value >= progress[index - 1]));
-	assert.equal(reveals.length, 1);
-	assert.equal(reveals[0].to, dialog);
+	assert.equal(blob.stops, 0);
+	assert.equal(engine.blobFlight, true);
+	assert.equal(panel.finalizes, 0);
+	blob.step(0);
 	assert.equal(engine.state, 'shown');
-	assert.equal(panel.style['--sheet-progress'], '1.000');
-	assert.equal(dialog.style.transform, 'translate3d(0px, 0px, 0px) scale(1)');
-	assert.equal(dialog.style.height, '680px');
-	assert.equal(shown, 1);
-	assert.equal(blobsInBody().length, 0);
+});
+
+elementTest('blob flights clone the trigger forward but never the live dialog in reverse', (t) => {
+	const { sheet } = makeMorphSheet(t);
+	sheet.show(makeTrigger());
+	const blob = currentBlob();
+	assert.equal(blob.runs[0].cloneContents, true);
+	blob.step(1);
+
+	sheet.hide();
+	assert.equal(blob.runs[1].cloneContents, false);
+	blob.step(1);
 });
 
 elementTest('a deliberate close morphs back and restores both owners exactly once', (t) => {
@@ -302,6 +434,116 @@ elementTest('a deliberate close morphs back and restores both owners exactly onc
 	assert.equal(trigger.style.getPropertyValue('visibility'), '');
 	assert.equal(blobsInBody().length, 0);
 });
+
+// A direct or force close leaves the dialog open until finalize, whose
+// dialog.close() QUEUES its close event — so a hidden listener that reopens a
+// trigger morph in the same task puts the NEW flight into exactly the state the
+// force-close repair looks for ('showing', blob up, dialog not yet promoted)
+// before the stale event lands. Only a reveal belonging to the current run may
+// arm the repair.
+elementTest('a stale queued close from the previous run spares a same-task reopen', async (t) => {
+	const frames = captureFrames(t);
+	const { dialog, engine, panel, sheet } = makeMorphSheet(t);
+	sheet.show();
+	drainFrames(frames);
+	assert.equal(engine.state, 'shown');
+
+	let reopened = false;
+	panel.addEventListener('hidden', () => {
+		if (reopened) return;
+		reopened = true;
+		sheet.show(makeTrigger());
+	});
+	sheet.hide();
+	drainFrames(frames);
+
+	assert.equal(reopened, true);
+	assert.equal(engine.state, 'showing');
+	const blob = currentBlob();
+	assert.equal(dialog.open, false, 'the reopened proxy run has not promoted yet');
+	// The previous run's queued close lands on the new flight.
+	await Promise.resolve();
+
+	assert.equal(blob.stops, 0);
+	assert.equal(engine.blobFlight, true);
+	blob.step(1);
+	assert.equal(engine.state, 'shown');
+	assert.equal(dialog.open, true);
+});
+
+elementTest('a plain open and close never touches consumer inline dialog styles', async (t) => {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	const { dialog, engine, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	dialog.style.margin = '24px';
+	dialog.style.maxHeight = '70vh';
+
+	sheet.show();
+	drainFrames(frames);
+	assert.equal(engine.state, 'shown');
+	sheet.hide();
+	drainFrames(frames);
+	assert.equal(engine.state, 'hidden');
+
+	assert.equal(dialog.style.margin, '24px');
+	assert.equal(dialog.style.maxHeight, '70vh');
+});
+
+// stop() emits no beforeHide, so hidden is the only hook that can clear a
+// stranded #waitForMorph timer and restore the consumer's snapshot.
+elementTest('a force-close during a profile morph restores pins at hidden', (t) => {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	const { dialog, engine, panel, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	dialog.style.margin = '18px';
+
+	sheet.show();
+	drainFrames(frames);
+	sheet.setAttribute('position', 'right');
+	sheet.attributeChangedCallback('position', 'bottom', 'right');
+	assert.equal(engine.morphing, true);
+	assert.equal(dialog.style.transition !== '', true, 'the FLIP owns an inline transition');
+
+	engine.stop();
+	panel.fire('hidden');
+
+	assert.equal(engine.morphing, false);
+	assert.equal(dialog.style.transition, '');
+	assert.equal(dialog.style.margin, '18px');
+});
+
+// dialog-panel demotes the dialog at hide-START for a proxy reverse — the blob
+// flies in normal flow, so a top-layer dialog would paint over it — which means
+// EVERY deliberate reverse close delivers a queued close event mid-flight with
+// the dialog closed. The force-close repair must not read that as an app-level
+// close: doing so stopped the blob dead and the panel vanished instead of
+// morphing back into its trigger.
+elementTest(
+	'a deliberate reverse close survives its own queued demotion close event',
+	async (t) => {
+		const { dialog, engine, panel, sheet } = makeMorphSheet(t);
+		sheet.show(makeTrigger());
+		const blob = currentBlob();
+		blob.step(1);
+
+		sheet.hide();
+		assert.equal(dialog.open, false);
+		// Let the demotion's queued close event land while the reverse is in flight.
+		await Promise.resolve();
+
+		assert.equal(blob.stops, 0);
+		assert.equal(engine.blobFlight, true);
+		assert.equal(engine.state, 'hiding');
+		blob.step(1);
+		assert.equal(engine.state, 'hidden');
+		assert.equal(panel.finalizes, 1);
+		assert.equal(blobsInBody().length, 0);
+	}
+);
 
 elementTest('a swipe close releases the blob before the exact spring exit', (t) => {
 	const frames = captureFrames(t);
@@ -331,34 +573,37 @@ elementTest('a swipe close releases the blob before the exact spring exit', (t) 
 	assert.equal(exitTransforms.at(-1), 'translate3d(0px, 708px, 0px) scale(1)');
 });
 
-elementTest('a vetoed gesture leaves the blob shown and the next deliberate close reverses', (t) => {
-	const frames = captureFrames(t);
-	const { engine, panel, sheet } = makeMorphSheet(t);
-	const trigger = makeTrigger();
-	sheet.show(trigger);
-	const blob = currentBlob();
-	blob.step(1);
-	let veto = true;
-	panel.addEventListener('beforeHide', (event) => {
-		if (!veto) return;
-		veto = false;
-		event.preventDefault();
-	});
+elementTest(
+	'a vetoed gesture leaves the blob shown and the next deliberate close reverses',
+	(t) => {
+		const frames = captureFrames(t);
+		const { engine, panel, sheet } = makeMorphSheet(t);
+		const trigger = makeTrigger();
+		sheet.show(trigger);
+		const blob = currentBlob();
+		blob.step(1);
+		let veto = true;
+		panel.addEventListener('beforeHide', (event) => {
+			if (!veto) return;
+			veto = false;
+			event.preventDefault();
+		});
 
-	sheet.fire('pointerdown', pointer());
-	sheet.fire('pointermove', pointer({ clientY: 420, timeStamp: 40 }));
-	sheet.fire('pointerup', pointer({ clientY: 420, timeStamp: 60 }));
-	drainFrames(frames);
+		sheet.fire('pointerdown', pointer());
+		sheet.fire('pointermove', pointer({ clientY: 420, timeStamp: 40 }));
+		sheet.fire('pointerup', pointer({ clientY: 420, timeStamp: 60 }));
+		drainFrames(frames);
 
-	assert.equal(engine.state, 'shown');
-	assert.equal(blob.state, 'shown');
-	assert.equal(trigger.style.visibility, 'hidden');
-	sheet.hide();
-	assert.equal(panel.hideModes.at(-1), false);
-	assert.equal(blob.runs.at(-1).phase, 'hiding');
-	blob.step(1);
-	assert.equal(engine.state, 'hidden');
-});
+		assert.equal(engine.state, 'shown');
+		assert.equal(blob.state, 'shown');
+		assert.equal(trigger.style.visibility, 'hidden');
+		sheet.hide();
+		assert.equal(panel.hideModes.at(-1), false);
+		assert.equal(blob.runs.at(-1).phase, 'hiding');
+		blob.step(1);
+		assert.equal(engine.state, 'hidden');
+	}
+);
 
 elementTest('hide during entrance reverses one blob run without restarting the backdrop', (t) => {
 	const { engine, panel, sheet } = makeMorphSheet(t);
@@ -480,6 +725,83 @@ elementTest('a vanished close trigger releases the blob and takes the direct spr
 	assert.equal(engine.state, 'hidden');
 });
 
+// The other half of the hidden-trigger gate. MorphEngine hides the source for
+// the whole flight and keeps it hidden for as long as the panel is shown, so by
+// the time the hide path probes the trigger its hidden style is the morph's own
+// doing. Checking visibility there would refuse every reverse morph — this
+// pins the ownership gate so the arm-time check can never be widened onto it.
+elementTest('the blob hiding its own trigger never refuses the reverse morph', (t) => {
+	const { engine, panel, sheet } = makeMorphSheet(t);
+	const trigger = makeTrigger();
+	sheet.show(trigger);
+	const blob = currentBlob();
+	blob.step(1);
+
+	assert.equal(trigger.style.visibility, 'hidden', 'the blob owns the trigger while shown');
+	assert.equal(engine.animatesDialog, false, 'and the close still classifies as a proxy reverse');
+	sheet.hide();
+	assert.equal(panel.hideModes[0], false);
+	assert.equal(blob.runs.at(-1).phase, 'hiding');
+	blob.step(1);
+	assert.equal(engine.state, 'hidden');
+});
+
+// Geometry is the gate the blob does not own, so it is the one that still
+// answers on the hide path. A page that pulls the trigger out of layout gets
+// the direct spring exit rather than a morph back into nothing.
+elementTest('a trigger removed from layout while open takes the direct spring exit', (t) => {
+	const frames = captureFrames(t);
+	const { engine, panel, sheet } = makeMorphSheet(t);
+	const trigger = makeTrigger();
+	sheet.show(trigger);
+	currentBlob().step(1);
+
+	trigger.style.display = 'none';
+	trigger.rect = { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 };
+
+	assert.equal(engine.animatesDialog, true);
+	sheet.hide();
+	assert.equal(panel.hideModes[0], true);
+	assert.equal(blobsInBody().length, 0);
+	drainFrames(frames);
+	assert.equal(engine.state, 'hidden');
+});
+
+// prefers-reduced-motion zeroes --sheet-morph-duration, and the policy is that
+// this disables the trigger morph rather than replacing the entrance with a
+// jump: the panel still arrives on the ordinary spring, exactly as it would
+// without `morph-trigger`. Classification alone would pass with no entrance at
+// all, so the spring has to be asserted too.
+elementTest('a zeroed morph duration keeps the ordinary spring entrance', (t) => {
+	const frames = captureFrames(t);
+	const { dialog, engine, panel, sheet } = makeMorphSheet(t);
+	dialog.style.setProperty('--sheet-morph-duration', '0ms');
+
+	sheet.show(makeTrigger());
+
+	assert.equal(panel.showModes[0], true, 'reduced motion selects the direct transport');
+	assert.equal(MorphEngine.instances.length, 0, 'and never builds a blob');
+	assert.equal(engine.state, 'showing');
+	assert.equal(dialog.style.transform, 'translate3d(0px, 708px, 0px) scale(1)');
+	assert.ok(frames.length > 0, 'the ordinary entrance spring is running');
+	drainFrames(frames);
+	assert.equal(engine.state, 'shown');
+	assert.equal(dialog.style.transform, 'translate3d(0px, 0px, 0px) scale(1)');
+});
+
+elementTest('morphsFromTrigger reflects the attribute in both directions', () => {
+	const sheet = new SheetPanel();
+	assert.equal(sheet.morphsFromTrigger, false);
+
+	sheet.morphsFromTrigger = true;
+	assert.equal(sheet.getAttribute('morph-trigger'), '');
+	assert.equal(sheet.morphsFromTrigger, true);
+
+	sheet.morphsFromTrigger = false;
+	assert.equal(sheet.hasAttribute('morph-trigger'), false);
+	assert.equal(sheet.morphsFromTrigger, false);
+});
+
 elementTest(
 	'SheetPanel refuses gesture capture while the engine is entering or exiting',
 	async (t) => {
@@ -527,6 +849,158 @@ elementTest(
 		engine.endMorph();
 	}
 );
+
+elementTest('a hide dispatched during a profile morph releases the park before the exit', (t) => {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	const { dialog, engine, panel, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+
+	sheet.show();
+	drainFrames(frames);
+	assert.equal(engine.state, 'shown');
+	assert.equal(panel.isOpen, true);
+
+	sheet.setAttribute('position', 'right');
+	sheet.attributeChangedCallback('position', 'bottom', 'right');
+	assert.equal(engine.morphing, true);
+	const transformAtHideStart = dialog.style.transform;
+	const exitTransforms = [];
+	engine.on('change', ({ phase }) => {
+		if (phase === 'hiding') exitTransforms.push(dialog.style.transform);
+	});
+
+	sheet.hide();
+	assert.equal(engine.morphing, false);
+	drainFrames(frames);
+
+	assert.equal(engine.state, 'hidden');
+	assert.notEqual(exitTransforms[0], transformAtHideStart);
+});
+
+/**
+ * Opens a sheet on a side profile with consumer-authored inline geometry.
+ *
+ * A side profile is deliberate: the engine paints no `height` for one, so the
+ * only writer of the properties asserted below is the profile FLIP itself.
+ * @param {Object} t - Test context.
+ * @param {string} [position] - Starting position.
+ * @returns {Object} Sheet parts plus the captured frame queue.
+ */
+function openStyledSheet(t, position = 'right') {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	wirePanelTransport(result);
+	t.after(() => {
+		if (result.sheet.hasAttribute('engine')) result.sheet.disconnectedCallback();
+	});
+	result.sheet.setAttribute('position', position);
+	result.dialog.style.height = '333px';
+	result.dialog.style.margin = '7px';
+	result.sheet.show();
+	drainFrames(frames);
+	assert.equal(result.engine.state, 'shown');
+	return { ...result, frames };
+}
+
+function startProfileMorph(sheet, from, to) {
+	sheet.setAttribute('position', to);
+	sheet.attributeChangedCallback('position', from, to);
+}
+
+// The FLIP writes its pins onto the same inline properties a consumer may
+// already have set, so blanking them on teardown silently deleted styles the
+// component never owned. Every path that ends a morph has to restore instead.
+elementTest('a completed profile morph restores the inline styles it pinned over', (t) => {
+	const { dialog, engine, sheet } = openStyledSheet(t);
+
+	startProfileMorph(sheet, 'right', 'left');
+	assert.equal(engine.morphing, true);
+	assert.equal(dialog.style.height, '500px', 'the FLIP pins the measured box');
+	assert.equal(dialog.style.margin, '0');
+
+	dialog.fire('transitionend', { target: dialog, propertyName: 'height' });
+
+	assert.equal(engine.morphing, false);
+	assert.equal(dialog.style.height, '333px');
+	assert.equal(dialog.style.margin, '7px');
+	assert.equal(dialog.style.top, '', 'a pin the consumer never set still goes');
+	assert.equal(dialog.style.transition, '');
+});
+
+elementTest('the morph safety timeout restores them too', async (t) => {
+	const { dialog, engine, sheet } = openStyledSheet(t);
+	// transitionend never fires for an interrupted transition or a property whose
+	// start equals its end, so the timeout is the guarantee — and it is a strip
+	// site like any other.
+	dialog.style.setProperty('--sheet-morph-duration', '1ms');
+
+	startProfileMorph(sheet, 'right', 'left');
+	assert.equal(dialog.style.height, '500px');
+	await new Promise((resolve) => setTimeout(resolve, 160));
+
+	assert.equal(engine.morphing, false);
+	assert.equal(dialog.style.height, '333px');
+	assert.equal(dialog.style.margin, '7px');
+});
+
+elementTest('a close interrupting a morph restores them before the exit runs', (t) => {
+	const { dialog, engine, frames, sheet } = openStyledSheet(t);
+
+	startProfileMorph(sheet, 'right', 'left');
+	assert.equal(dialog.style.height, '500px');
+
+	sheet.hide();
+
+	// beforeHide abandons the FLIP, so the exit has to animate the consumer's
+	// box rather than the pinned one.
+	assert.equal(engine.morphing, false);
+	assert.equal(dialog.style.height, '333px');
+	assert.equal(dialog.style.margin, '7px');
+	drainFrames(frames);
+	assert.equal(engine.state, 'hidden');
+});
+
+// A window edge dragged back and forth re-enters #morphToProfile with the
+// previous FLIP's pins still on the dialog. Re-snapshotting there would promote
+// that scaffolding to "what the consumer had" and the restore would hand back
+// the pins forever.
+elementTest('a re-entrant profile morph keeps the original consumer styles', (t) => {
+	const { dialog, engine, sheet } = openStyledSheet(t);
+
+	startProfileMorph(sheet, 'right', 'left');
+	assert.equal(dialog.style.height, '500px');
+	startProfileMorph(sheet, 'left', 'center');
+	assert.equal(engine.morphing, true, 'the retarget stays parked');
+	assert.equal(dialog.style.height, '500px', 'and is still pinned');
+
+	dialog.fire('transitionend', { target: dialog, propertyName: 'height' });
+
+	assert.equal(dialog.style.height, '333px');
+	assert.equal(dialog.style.margin, '7px');
+});
+
+// The one property on the pin list the ENGINE also writes. A mobile bottom
+// sheet's inline height is its painted snap, not a consumer style, and the
+// profile it is morphing into paints no height at all — so carrying it across
+// would pin a side sheet to the bottom sheet's snap forever.
+elementTest('a snap-painted height is never carried across a profile morph', (t) => {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	const { dialog, engine, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('snap-points', '500px');
+	sheet.show();
+	drainFrames(frames);
+	assert.equal(dialog.style.height, '500px', 'the bottom sheet paints its snap inline');
+
+	startProfileMorph(sheet, 'bottom', 'right');
+	dialog.fire('transitionend', { target: dialog, propertyName: 'height' });
+
+	assert.equal(dialog.style.height, '', 'the side profile is left to the stylesheet');
+});
 
 elementTest(
 	'a hide-to-show reversal keeps the painted progress before its first frame',
@@ -783,4 +1257,39 @@ elementTest('intrinsic box measurement neutralises and restores an inline transf
 
 	assert.deepEqual(engine.snaps, [500]);
 	assert.equal(dialog.style.transform, entranceTransform);
+});
+
+elementTest('a vetoed trigger-morph show disarms the hidden engine', (t) => {
+	const frames = captureFrames(t);
+	const { engine, panel, sheet } = makeMorphSheet(t);
+	const triggerA = makeTrigger();
+	const triggerB = makeTrigger();
+	triggerB.rect = { top: 240, left: 80, right: 128, bottom: 288, width: 48, height: 48 };
+	let veto = true;
+	panel.addEventListener('beforeShow', (event) => {
+		if (!veto) return;
+		veto = false;
+		event.preventDefault();
+	});
+
+	assert.equal(sheet.show(triggerA), false);
+	assert.equal(engine.state, 'hidden');
+	assert.equal(engine.animatesDialog, true);
+
+	assert.equal(sheet.show(), true);
+	assert.equal(engine.state, 'showing');
+	assert.equal(panel.showModes.at(-1), true);
+	drainFrames(frames);
+	assert.equal(engine.state, 'shown');
+
+	assert.equal(sheet.hide(), true);
+	drainFrames(frames);
+	assert.equal(engine.state, 'hidden');
+
+	assert.equal(sheet.show(triggerB), true);
+	const blob = currentBlob();
+	assert.equal(panel.showModes.at(-1), false);
+	assert.equal(blob.runs.at(-1).from, triggerB);
+	assert.equal(blob.runs.at(-1).to.tagName, 'DIALOG');
+	blob.step(1);
 });

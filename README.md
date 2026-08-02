@@ -13,7 +13,7 @@ Gesture-driven edge sheets and floating cards built on a real native `<dialog>` 
 - Header, footer, backdrop, and scroll-aware content drag surfaces
 - Native dialog focus trapping, focus return, Escape handling, and modal semantics
 - Safe-area-aware optional footer
-- No morph-engine integration; a small sheet engine uses dialog-panel's transport seam directly
+- Optional trigger morph via `@magic-spells/morph-engine`: `morph-trigger` grows the panel out of the element passed to `show()` and reverses back into it on a deliberate close
 
 ## Installation
 
@@ -135,8 +135,15 @@ page, so curving the exit into it fights the gesture and reads as two competing 
 
 The morph is likewise skipped, and the ordinary spring runs, whenever it cannot be done
 honestly — no trigger passed, the trigger removed from the DOM or scrolled out of view
-before close, or `prefers-reduced-motion`, which zeroes `--sheet-morph-duration` and
-collapses the whole thing to an instant swap.
+before close, a trigger the page has hidden with `visibility`, `display: none`, or
+`opacity: 0` (the blob renders a clone with those forced back on, so morphing out of one
+would flash content the page meant to hide), or `prefers-reduced-motion`.
+
+**Reduced motion turns the morph off, not the entrance.** It zeroes
+`--sheet-morph-duration`, which disables the trigger morph outright — the panel then
+arrives and leaves on the ordinary spring, exactly as it would without the attribute. The
+same zeroed token collapses a *profile* morph to an instant swap, because that one has no
+spring to fall back to.
 
 ## Sizing
 
@@ -384,7 +391,7 @@ Set tokens on `:root`, a panel, or another ancestor.
 | `--sheet-desktop-panel-width` | `min(26rem, 90vw)` | Maximum desktop card width |
 | `--sheet-center-width` | `min(28rem, 100vw - 2 * card margin)` | Width of a `center` dialog; its height follows its content |
 | `--sheet-exit-cushion` | `28px` | How far past its edge a dismissal carries the panel, on top of its size and inset. Raise it to about your shadow's blur if the panel leaves a halo on the way out |
-| `--sheet-morph-duration` | `600ms` | Profile-morph duration; `0` swaps instantly |
+| `--sheet-morph-duration` | `600ms` | Two roles: the profile-morph duration, and the trigger-morph gate. `0` — which `prefers-reduced-motion` sets — swaps a profile morph instantly and disables the trigger morph entirely, leaving the ordinary spring entrance and exit |
 | `--sheet-morph-easing` | `cubic-bezier(0.34, 1.32, 0.52, 1)` | Profile-morph easing; overshoots slightly by default |
 | `--sheet-backdrop-progress` | written per frame | Read-only. Drives the overlay from the dismissal zone; always `0`–`1` |
 | `--sheet-progress` | written per frame | Read-only. Exactly what was painted — a bottom sheet publishes its snap breath up to about `1.024`, no other profile exceeds `1` |
