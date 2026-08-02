@@ -1,11 +1,17 @@
 import { build, createServer } from 'vite';
-import { rm, mkdir } from 'node:fs/promises';
+import { rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import liveReload from '@magic-spells/vite-plugin-live-reload';
 
 const isDev = process.env.NODE_ENV === 'development';
 const outDir = isDev ? 'demo/dist' : 'dist';
-const runtimeDependencies = [
+// External in the ESM build so the app's module graph supplies one shared copy
+// of each — dialog-panel via peerDependencies, the engines via dependencies.
+// All of them are bundled into the UMD, which a plain <script> tag loads as
+// one self-contained file.
+const externalRuntime = [
+	'@magic-spells/dialog-panel',
 	'@magic-spells/frame-engine',
 	'@magic-spells/morph-engine',
 	'@magic-spells/physics-engine',
@@ -41,7 +47,7 @@ function esmConfig({ emitCss = false } = {}) {
 			minify: false,
 			cssMinify: emitCss ? false : undefined,
 			rolldownOptions: {
-				external: runtimeDependencies,
+				external: externalRuntime,
 				output: { exports: 'named' },
 			},
 		},
@@ -107,7 +113,22 @@ async function main() {
 		for (const config of configs) {
 			await build(config);
 		}
+		await writeGzipSizes();
 	}
+}
+
+// The demo's hero fetches these numbers, so they are measured from the real
+// artifacts here rather than hand-maintained in the HTML. Written into
+// demo/dist (which is committed) so both the dev server and GitHub Pages
+// serve it; dev builds never empty that directory, so the file survives
+// watch runs and only a production build can change it.
+async function writeGzipSizes() {
+	const sizes = {};
+	for (const file of ['sheet.min.js', 'sheet.min.css']) {
+		sizes[file] = gzipSync(await readFile(`dist/${file}`)).length;
+	}
+	await mkdir('demo/dist', { recursive: true });
+	await writeFile('demo/dist/sizes.json', `${JSON.stringify(sizes, null, '\t')}\n`);
 }
 
 main().catch((error) => {

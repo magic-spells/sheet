@@ -953,9 +953,20 @@ Internal `data-position`, `data-mode`, `data-desktop`, and `data-effect` attribu
 - `sheet.min.js` — minified UMD with runtime dependencies bundled
 - `sheet.css` and `sheet.min.css`
 
-Production output is cleaned before sequential builds. Development output goes to `demo/dist` and is
-**ESM only** — the demo loads `sheet.esm.js` and `sheet.css` and nothing else, so building a UMD on
-every watch tick was pure cost. The server runs on port 3066.
+`src/sheet.js` side-effect imports `@magic-spells/dialog-panel`, so one install and one import set
+up the whole family. It is external in the ESM build like the engines — but as a **peerDependency**,
+because it registers the `<dialog-panel>` custom element and must stay a singleton however many
+spells import it; bundlers dedupe the bare specifier to the app's one hoisted copy. The UMD bundles
+it along with the engines, which the guarded `customElements.get()` defines on both sides make safe
+even when a page also loads dialog-panel's own script. npm 7+ and pnpm auto-install the peer, so
+`npm install @magic-spells/sheet` alone works there; Yarn 1 needs it named explicitly.
+
+Production output is cleaned before sequential builds, and the production path then gzips
+`sheet.min.js` and `sheet.min.css` and writes the byte counts to `demo/dist/sizes.json`, which the
+demo hero fetches — the advertised sizes are measured from the artifacts, never hand-maintained.
+Development output goes to `demo/dist` and is **ESM only** — the demo loads `sheet.esm.js` and
+`sheet.css` and nothing else, so building a UMD on every watch tick was pure cost. The server runs
+on port 3066.
 
 #### There is no CommonJS build, on purpose
 
@@ -1013,7 +1024,9 @@ within a frame.
 artifacts rather than inspecting them: a module-format or interop mistake is invisible until
 something loads the file. It pins the shipped file list to exactly `sheet.esm.js` and
 `sheet.min.js`, checks both expose the same seven named exports, and asserts the split that
-distinguishes them — the ESM keeps the engines as bare imports, the UMD bundles them. The UMD runs
+distinguishes them — the ESM keeps dialog-panel and the engines as bare imports (dialog-panel as a
+`from`-less side-effect import, which the singleton rule above requires stay external), the UMD
+bundles them all. The UMD runs
 through a `node:vm` sandbox shaped like CommonJS on purpose: loaded as ESM it would take its global
 branch instead and assert nothing about what a consumer receives. All of it skips cleanly when
 `dist/` has not been built.

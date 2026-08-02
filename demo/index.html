@@ -34,6 +34,7 @@
 		<script type="importmap">
 			{
 				"imports": {
+					"@magic-spells/dialog-panel": "./vendor/dialog-panel.esm.js",
 					"@magic-spells/frame-engine": "./vendor/frame-engine.esm.js",
 					"@magic-spells/morph-engine": "./vendor/morph-engine.esm.js",
 					"@magic-spells/physics-engine": "./vendor/physics-engine.esm.js"
@@ -399,6 +400,23 @@
 			.install.copied .install-value {
 				color: var(--iris-text);
 				border-color: var(--iris-dim);
+			}
+
+			.install-sizes {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				gap: 0.35rem;
+				margin-top: 0.65rem;
+				color: var(--cream);
+				font-family: var(--font-mono);
+				font-size: 0.78rem;
+				letter-spacing: 0.06em;
+			}
+
+			.install-sizes em {
+				font-style: normal;
+				color: var(--iris-text);
 			}
 
 			.uses {
@@ -1384,8 +1402,9 @@
 			<div class="install">
 				<span class="install-label" id="install-label">Install</span>
 				<code class="install-value" id="install-value" title="Click to copy"
-					>npm install @magic-spells/sheet @magic-spells/dialog-panel</code
+					>npm install @magic-spells/sheet</code
 				>
+				<span class="install-sizes" id="install-sizes" hidden></span>
 				<div class="uses">
 					<span class="uses-label">Uses</span>
 					<a
@@ -2355,8 +2374,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 					<button class="btn" data-open="api-panel">Open the reference sheet</button>
 				</div>
 				<pre
-					class="code-block"><span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/dialog-panel'</span>;
-<span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/sheet'</span>;
+					class="code-block"><span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/sheet'</span>; <span class="hl-cm">// registers dialog-panel too</span>
 
 <span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/dialog-panel/css'</span>;
 <span class="hl-tag">import</span> <span class="hl-val">'@magic-spells/sheet/css'</span>;
@@ -3872,7 +3890,8 @@ sheet.hide();</pre>
 		</dialog-panel>
 
 		<script type="module">
-			import './vendor/dialog-panel.esm.js';
+			// sheet.esm.js side-effect imports @magic-spells/dialog-panel itself;
+			// the importmap above points that bare specifier at the vendor copy.
 			import './dist/sheet.esm.js';
 
 			const $ = (selector, root = document) => root.querySelector(selector);
@@ -3899,6 +3918,23 @@ sheet.hide();</pre>
 					/* selection fallback — the command is already highlighted */
 				}
 			});
+
+			// ---- Gzip sizes, measured by the production build ----
+			// scripts/build.mjs gzips the real dist artifacts and writes
+			// dist/sizes.json; nothing here is hand-maintained. Missing file
+			// (fresh checkout with no production build yet) leaves the line hidden.
+			fetch('./dist/sizes.json')
+				.then((response) => (response.ok ? response.json() : null))
+				.then((sizes) => {
+					if (!sizes) return;
+					const kb = (bytes) => `${(bytes / 1000).toFixed(1)} kB`;
+					const sizesLine = $('#install-sizes');
+					sizesLine.innerHTML = Object.entries(sizes)
+						.map(([file, bytes]) => `<span>${file} <em>${kb(bytes)} gzip</em></span>`)
+						.join('');
+					sizesLine.hidden = false;
+				})
+				.catch(() => {});
 
 			// ---- Event log ----
 			const log = $('#event-log');

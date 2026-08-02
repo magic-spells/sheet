@@ -1,8 +1,10 @@
-# Sheet Web Component
+# @magic-spells/sheet
+
+**~13 KB** gzipped · ~20 KB with the engines bundled
 
 Gesture-driven edge sheets and floating cards built on a real native `<dialog>` through `@magic-spells/dialog-panel`. `@magic-spells/sheet` adds spring motion, bottom-sheet snap points, drag/flick policy, and responsive presentation profiles.
 
-[**Live Demo**](https://magic-spells.github.io/sheet/demo/)
+🔍 **[Live Demo](https://magic-spells.github.io/sheet/demo/)** - See it in action!
 
 ## Features
 
@@ -18,34 +20,35 @@ Gesture-driven edge sheets and floating cards built on a real native `<dialog>` 
 ## Installation
 
 ```bash
-npm install @magic-spells/sheet @magic-spells/dialog-panel
+npm install @magic-spells/sheet
 ```
 
 ```js
-import '@magic-spells/dialog-panel';
-import '@magic-spells/sheet';
+import '@magic-spells/sheet'; // registers the sheet elements AND <dialog-panel>
 
 import '@magic-spells/dialog-panel/css';
 import '@magic-spells/sheet/css';
 ```
 
-Only `@magic-spells/dialog-panel` is named on that line, and the asymmetry is deliberate. You import
-dialog-panel yourself and write `<dialog-panel>` in your own markup, so it belongs in your own
-`package.json`. It is declared here as a **peer dependency**, which npm 7+ and pnpm install
-automatically — `npm install @magic-spells/sheet` on its own really does produce all four packages.
-Yarn 1 is the exception: it installs the rest and reduces the missing peer to a warning, which leaves
-`<dialog-panel>` undefined at runtime. Naming it on the install line is what makes the command
-correct on every package manager, and what keeps you from importing a package you never declared at a
-version this package's peer range chose for you.
+One install, one JS import. `@magic-spells/sheet` side-effect imports
+`@magic-spells/dialog-panel`, so importing this package registers `<dialog-panel>` and
+`<dialog-backdrop>` alongside the four sheet elements. You still write `<dialog-panel>` in your own
+markup and import its stylesheet; if you also use dialog-panel directly — other dialogs in the same
+project, say — add it to your own `package.json` and import it as usual. Nothing duplicates.
 
-Peer is also the right field because dialog-panel has to be a **singleton**. It registers the
-`<dialog-panel>` custom element, and a tag name can only be claimed once per document, so several
-packages depending on it must converge on one copy rather than each nesting their own. Peer
-semantics are what push npm to reconcile them and to warn when ranges genuinely conflict. Both
-packages also guard every registration with `customElements.get()`, so a duplicate that slips
-through no-ops instead of throwing — and this package never imports dialog-panel at all. It finds
-the element with `closest('dialog-panel')` and drives it through the duck-typed transport, so it
-holds no reference to dialog-panel's class and cannot be confused about which copy won.
+That no-duplication guarantee is why dialog-panel is declared as a **peer dependency** rather than a
+regular one. It has to be a singleton: it registers the `<dialog-panel>` custom element, and a tag
+name can only be claimed once per document, so every package depending on it must converge on one
+copy rather than each nesting their own. Peer semantics push npm to reconcile them and to warn when
+ranges genuinely conflict, and the import stays external in the ESM build, so your bundler resolves
+it from `node_modules` exactly once however many spells import it. Both packages also guard every
+registration with `customElements.get()`, so a duplicate that slips through no-ops instead of
+throwing.
+
+npm 7+ and pnpm install peer dependencies automatically, which is what makes the one-line install
+complete. Yarn 1 is the exception: it reduces the missing peer to a warning, which leaves
+`<dialog-panel>` undefined at runtime — on Yarn 1, install it explicitly:
+`yarn add @magic-spells/sheet @magic-spells/dialog-panel`.
 
 Physics Engine and Frame Engine are **hard runtime dependencies**. They are not optional and not
 swappable: every spring and every keyframe in this package runs through them, so a sheet without
@@ -55,12 +58,10 @@ manager installs them, always, with no peer-resolution rules involved. You simpl
 bundler resolves them from `node_modules`, and are bundled into the UMD build so a `<script>` tag
 needs nothing else.
 
-The three differ in who owns the import, not in how required they are. All three are mandatory.
-
-The one case where those two names become your concern is loading `dist/sheet.esm.js` straight into
-a browser with no bundler, since nothing is there to resolve the bare specifiers. Supply an import
-map — the [demo](./demo/index.html) does exactly that — or use `dist/sheet.min.js`, which already has
-them bundled.
+The one case where the bare specifiers become your concern is loading `dist/sheet.esm.js` straight
+into a browser with no bundler, since nothing is there to resolve them. Supply an import map
+covering dialog-panel and the engines — the [demo](./demo/index.html) does exactly that — or use
+`dist/sheet.min.js`, which already has all of them bundled.
 
 The package ships two entry points and no CommonJS build: `dist/sheet.esm.js` for anything with a
 module graph, and `dist/sheet.min.js` — a self-contained UMD — for a plain `<script>` tag. No
@@ -469,3 +470,9 @@ Modern browsers with custom elements, native `<dialog>`, Pointer Events, `:has()
 ## License
 
 MIT
+
+---
+
+<p align="center">
+  Made by <a href="https://github.com/coryschulz">Cory Schulz</a>
+</p>

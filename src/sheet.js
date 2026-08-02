@@ -1,3 +1,8 @@
+// Side-effect import: registers <dialog-panel> and <dialog-backdrop> so one
+// install and one import set up the whole family. It stays a peerDependency —
+// external in the ESM build, so every spell in a project resolves to the app's
+// single copy — and its guarded defines make even a duplicate copy harmless.
+import '@magic-spells/dialog-panel';
 import './sheet.css';
 import { DragGesture } from './drag-gesture.js';
 import {

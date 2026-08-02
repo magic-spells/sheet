@@ -54,6 +54,14 @@ test('the ESM build keeps its runtime dependencies external', { skip: !built }, 
 			`${dependency} should stay a bare import in the ESM build`
 		);
 	}
+	// dialog-panel is imported for its registration side effect alone, so it has
+	// no `from` clause — but it must still be external: bundling it would nest a
+	// second copy of the singleton the peer dependency exists to prevent.
+	assert.match(
+		source,
+		/import\s*["']@magic-spells\/dialog-panel["']/,
+		'@magic-spells/dialog-panel should stay a bare side-effect import in the ESM build'
+	);
 });
 
 // Executed through a CommonJS-shaped sandbox so the UMD's `module.exports`

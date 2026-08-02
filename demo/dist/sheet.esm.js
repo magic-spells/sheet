@@ -1,3 +1,4 @@
+import "@magic-spells/dialog-panel";
 import PhysicsEngine from "@magic-spells/physics-engine";
 import FrameEngine from "@magic-spells/frame-engine";
 import { MorphEngine } from "@magic-spells/morph-engine";
