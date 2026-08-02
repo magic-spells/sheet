@@ -1002,6 +1002,91 @@ elementTest('a snap-painted height is never carried across a profile morph', (t)
 	assert.equal(dialog.style.height, '', 'the side profile is left to the stylesheet');
 });
 
+// Every non-snap profile carries exactly one snap, so its live index is always
+// 0 — and reusing that index across a breakpoint morph landed the panel on the
+// LOWEST mobile snap, while a fresh mobile open resolves initial-snap to the
+// highest. The index may only be carried between two snap-resized profiles;
+// everything else re-resolves initial-snap exactly like a fresh open. The
+// crossing is driven by the breakpoint attribute because a desktop profile
+// measures the stubbed dialog box — a side profile's width probe resolves
+// nothing under the stubs, and its refused setSnaps would mask the carry.
+elementTest('a morph back below the breakpoint lands on initial-snap, not the lowest', (t) => {
+	const frames = captureFrames(t);
+	const originalWidth = window.innerWidth;
+	t.after(() => {
+		window.innerWidth = originalWidth;
+	});
+	window.innerWidth = 400;
+	const result = makeSheet();
+	const { dialog, engine, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('snap-points', '200px 500px');
+	sheet.show();
+	drainFrames(frames);
+	assert.equal(engine.activeSnap, 1, 'a fresh open resolves to the highest snap');
+
+	sheet.setAttribute('breakpoint', '300');
+	sheet.attributeChangedCallback('breakpoint', null, '300');
+	dialog.fire('transitionend', { target: dialog, propertyName: 'height' });
+	assert.equal(engine.snaps.length, 1, 'the desktop profile carries one snap');
+	assert.equal(engine.activeSnap, 0);
+
+	sheet.setAttribute('breakpoint', '768');
+	sheet.attributeChangedCallback('breakpoint', '300', '768');
+	dialog.fire('transitionend', { target: dialog, propertyName: 'height' });
+
+	assert.deepEqual(engine.snaps, [200, 500]);
+	assert.equal(engine.activeSnap, 1);
+	assert.equal(engine.currentSize, 500);
+	assert.equal(dialog.style.height, '500px');
+});
+
+// #activeSnap only advances when a settle COMPLETES, so during a snap flight it
+// still names the snap the settle started from. A second flick claiming
+// mid-settle used that stale rest as its base pose, teleporting the panel back
+// to the previous position before re-transitioning — visible on every quick
+// double flick, in both directions. The drag must continue from the size
+// actually painted at the moment it claims.
+elementTest('a flick claiming mid-settle continues from the painted size', (t) => {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	const { dialog, engine, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('snap-points', '200px 500px');
+	sheet.show();
+	drainFrames(frames);
+	assert.equal(engine.currentSize, 500);
+
+	// Flick down toward the lower snap, then interrupt the settle mid-flight.
+	sheet.fire('pointerdown', pointer());
+	sheet.fire('pointermove', pointer({ clientY: 60, timeStamp: 40 }));
+	sheet.fire('pointerup', pointer({ clientY: 60, timeStamp: 50 }));
+	for (let index = 0; index < 6; index++) {
+		assert.ok(frames.length > 0, `settle frame ${index + 1} is queued`);
+		frames.shift()(index * 16.66);
+	}
+	const midSize = engine.currentSize;
+	assert.ok(midSize > 200 && midSize < 440, `the settle is genuinely mid-flight (${midSize})`);
+
+	// Second flick, upward, while the first settle is still running. The claim
+	// must continue from the painted size — the stale #activeSnap still says
+	// 500, and basing the pose there painted 500 + drag on the first move.
+	sheet.fire('pointerdown', pointer({ timeStamp: 200 }));
+	sheet.fire('pointermove', pointer({ clientY: -40, timeStamp: 240 }));
+	// The paint rounds to four decimals; the tolerance is orders of magnitude
+	// below the ~150px teleport this test exists to refuse.
+	const painted = Number.parseFloat(dialog.style.height);
+	assert.ok(Math.abs(painted - (midSize + 40)) < 0.001, `${painted} continues ${midSize} + 40`);
+
+	sheet.fire('pointerup', pointer({ clientY: -40, timeStamp: 250 }));
+	drainFrames(frames);
+	assert.equal(engine.activeSnap, 1, 'the upward flick steps back to the higher snap');
+	assert.equal(engine.currentSize, 500);
+	assert.equal(dialog.style.height, '500px');
+});
+
 elementTest(
 	'a hide-to-show reversal keeps the painted progress before its first frame',
 	async (t) => {

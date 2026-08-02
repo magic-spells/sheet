@@ -1484,7 +1484,10 @@ var SheetEngine = class extends EventEmitter {
 	dragBy(offsetPx) {
 		const _ = this;
 		if (!_.#dialog || _.#state !== "shown" || _.#parked()) return;
-		if (_.#spring.isAnimating) _.#spring.stop();
+		if (_.#spring.isAnimating) {
+			_.#spring.stop();
+			_.#settleAction = null;
+		}
 		const activeSize = _.#snaps[_.#activeSnap];
 		_.#currentSize = activeSize - offsetPx;
 		_.#frames = _.#makeDragFrames(activeSize);
@@ -2982,8 +2985,10 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#applyLiveOffset(offset) {
 		const _ = this;
 		const activeSize = _.#snaps[_.#engine.activeSnap];
+		const drag = _.#drag;
+		if (drag.base === void 0) drag.base = _.#engine.currentSize;
 		const maximum = _.#snaps[_.#snaps.length - 1];
-		let size = activeSize - offset;
+		let size = drag.base - offset;
 		if (size > maximum) size = maximum + Math.sqrt(size - maximum) * 10 * OVERSCROLL_RESISTANCE;
 		if (size < 0) size = -Math.sqrt(-size) * 10 * OVERSCROLL_RESISTANCE;
 		_.#engine.dragBy(activeSize - size);
@@ -3028,6 +3033,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#prepareOpen() {
 		const _ = this;
 		if (!_.#engine) return;
+		const previous = _.#profile;
 		const profile = _.#resolveProfile();
 		_.#applyProfile(profile);
 		if (!resizesWithSnaps(profile)) _.#syncActiveSize(0);
@@ -3038,7 +3044,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#engine.setSnaps(_.#snaps, 0);
 		} else {
 			_.#snaps = snaps;
-			const activeIndex = _.panel?.isOpen ? _.#engine.activeSnap : requestedIndex;
+			const activeIndex = _.panel?.isOpen && !!previous && resizesWithSnaps(previous) ? _.#engine.activeSnap : requestedIndex;
 			_.#engine.setSnaps(_.#snaps, Math.min(activeIndex, _.#snaps.length - 1));
 		}
 		_.#syncActiveSize(_.#engine.activeSnap);

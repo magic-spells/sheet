@@ -1045,8 +1045,17 @@ class SheetPanel extends HTMLElement {
 	#applyLiveOffset(offset) {
 		const _ = this;
 		const activeSize = _.#snaps[_.#engine.activeSnap];
+		// The gesture's base pose is the size actually painted when the drag
+		// claimed, not the active snap's rest. #activeSnap still names the snap
+		// an interrupted settle STARTED from — it only advances when a settle
+		// completes — so basing the pose on its rest teleported a mid-settle
+		// claim back to the previous position and re-transitioned from there:
+		// every quick second flick jumped before it moved. At rest the painted
+		// size IS the active snap size, so an ordinary drag is unchanged.
+		const drag = _.#drag;
+		if (drag.base === undefined) drag.base = _.#engine.currentSize;
 		const maximum = _.#snaps[_.#snaps.length - 1];
-		let size = activeSize - offset;
+		let size = drag.base - offset;
 		if (size > maximum) {
 			size = maximum + Math.sqrt(size - maximum) * 10 * OVERSCROLL_RESISTANCE;
 		}
@@ -1120,6 +1129,7 @@ class SheetPanel extends HTMLElement {
 	#prepareOpen() {
 		const _ = this;
 		if (!_.#engine) return;
+		const previous = _.#profile;
 		const profile = _.#resolveProfile();
 		_.#applyProfile(profile);
 		if (!resizesWithSnaps(profile)) _.#syncActiveSize(0);
@@ -1136,7 +1146,14 @@ class SheetPanel extends HTMLElement {
 			_.#engine.setSnaps(_.#snaps, 0);
 		} else {
 			_.#snaps = snaps;
-			const activeIndex = _.panel?.isOpen ? _.#engine.activeSnap : requestedIndex;
+			// The engine's live index is only meaningful while it names a spot in
+			// THIS snap list — a same-profile resize re-measures the heights and
+			// must keep the snap the user chose. Every other profile carries one
+			// snap, so its index is always 0, and reusing it across a breakpoint
+			// or position morph landed the panel on the LOWEST mobile snap while a
+			// fresh open resolves initial-snap to the highest.
+			const carrySnap = _.panel?.isOpen && !!previous && resizesWithSnaps(previous);
+			const activeIndex = carrySnap ? _.#engine.activeSnap : requestedIndex;
 			_.#engine.setSnaps(_.#snaps, Math.min(activeIndex, _.#snaps.length - 1));
 		}
 

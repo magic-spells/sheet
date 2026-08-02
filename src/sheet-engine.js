@@ -1518,7 +1518,13 @@ class SheetEngine extends EventEmitter {
 	dragBy(offsetPx) {
 		const _ = this;
 		if (!_.#dialog || _.#state !== 'shown' || _.#parked()) return;
-		if (_.#spring.isAnimating) _.#spring.stop();
+		// A drag claiming mid-settle supersedes the spring AND its action:
+		// stop() resolves the settle promise without running #settle, so the
+		// action would otherwise sit stale through the whole gesture.
+		if (_.#spring.isAnimating) {
+			_.#spring.stop();
+			_.#settleAction = null;
+		}
 
 		const activeSize = _.#snaps[_.#activeSnap];
 		_.#currentSize = activeSize - offsetPx;
