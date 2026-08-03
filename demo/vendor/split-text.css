@@ -1,0 +1,226 @@
+split-text:not(:defined) {
+  visibility: hidden;
+}
+
+split-text[data-state="splitting"] {
+  visibility: hidden;
+}
+
+split-text {
+  --split-text-duration: .8s;
+  --split-text-easing: cubic-bezier(.16, 1, .3, 1);
+  --split-text-distance: 100%;
+  --split-text-stagger: 30ms;
+  --split-text-delay: 0s;
+  --split-text-perspective: 2000px;
+  perspective: var(--split-text-perspective);
+  display: inline;
+}
+
+split-text .split-text-word, split-text .split-text-char {
+  vertical-align: top;
+  display: inline-block;
+  overflow: hidden;
+}
+
+split-text .split-text-word-inner, split-text .split-text-char-inner {
+  transform: translateY(var(--split-text-distance));
+  opacity: 0;
+  will-change: transform, opacity;
+  display: inline-block;
+}
+
+split-text[effect="drop"] .split-text-word-inner, split-text[effect="drop"] .split-text-char-inner {
+  transform: translateY(calc(var(--split-text-distance) * -1));
+}
+
+split-text[effect="slide-right"] .split-text-word-inner, split-text[effect="slide-right"] .split-text-char-inner {
+  transform: translateX(var(--split-text-distance));
+}
+
+split-text[effect="slide-left"] .split-text-word-inner, split-text[effect="slide-left"] .split-text-char-inner {
+  transform: translateX(calc(var(--split-text-distance) * -1));
+}
+
+split-text[effect="bloom"] .split-text-word-inner, split-text[effect="bloom"] .split-text-char-inner {
+  transform: scale(var(--split-text-scale, .7));
+  filter: blur(var(--split-text-blur, 2px));
+  will-change: transform, opacity, filter;
+}
+
+split-text[effect="spin-x"] .split-text-word-inner, split-text[effect="spin-x"] .split-text-char-inner {
+  transform-origin: var(--split-text-origin, bottom);
+  transform: rotateX(90deg);
+}
+
+split-text[effect="spin-y"] .split-text-word-inner, split-text[effect="spin-y"] .split-text-char-inner {
+  transform-origin: var(--split-text-origin, left);
+  transform: rotateY(90deg);
+}
+
+split-text[effect="magnetic"] .split-text-word-inner, split-text[effect="magnetic"] .split-text-char-inner {
+  transform: translate(var(--split-text-mx, 10px), var(--split-text-my, 0));
+  filter: blur(var(--split-text-blur, 2px));
+  will-change: transform, opacity, filter;
+}
+
+split-text[effect="magnetic"] .split-text-word, split-text[effect="magnetic"] .split-text-char {
+  overflow: visible;
+}
+
+split-text[data-state="revealing"] .split-text-word-inner, split-text[data-state="revealing"] .split-text-char-inner {
+  animation: split-text-rise var(--split-text-duration) var(--split-text-easing) both;
+  animation-delay: calc(var(--split-text-delay) + var(--i, 0) * var(--split-text-stagger));
+}
+
+split-text[effect="drop"][data-state="revealing"] .split-text-word-inner, split-text[effect="drop"][data-state="revealing"] .split-text-char-inner {
+  animation-name: split-text-drop;
+}
+
+split-text[effect="slide-right"][data-state="revealing"] .split-text-word-inner, split-text[effect="slide-right"][data-state="revealing"] .split-text-char-inner {
+  animation-name: split-text-slide-right;
+}
+
+split-text[effect="slide-left"][data-state="revealing"] .split-text-word-inner, split-text[effect="slide-left"][data-state="revealing"] .split-text-char-inner {
+  animation-name: split-text-slide-left;
+}
+
+split-text[effect="bloom"][data-state="revealing"] .split-text-word-inner, split-text[effect="bloom"][data-state="revealing"] .split-text-char-inner {
+  animation-name: split-text-bloom;
+}
+
+split-text[effect="spin-x"][data-state="revealing"] .split-text-word-inner, split-text[effect="spin-x"][data-state="revealing"] .split-text-char-inner {
+  animation-name: split-text-spin-x;
+}
+
+split-text[effect="spin-y"][data-state="revealing"] .split-text-word-inner, split-text[effect="spin-y"][data-state="revealing"] .split-text-char-inner {
+  animation-name: split-text-spin-y;
+}
+
+split-text[effect="magnetic"][data-state="revealing"] .split-text-word-inner, split-text[effect="magnetic"][data-state="revealing"] .split-text-char-inner {
+  animation-name: split-text-magnetic;
+}
+
+@keyframes split-text-rise {
+  from {
+    transform: translateY(var(--split-text-distance));
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes split-text-drop {
+  from {
+    transform: translateY(calc(var(--split-text-distance) * -1));
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes split-text-slide-right {
+  from {
+    transform: translateX(var(--split-text-distance));
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes split-text-slide-left {
+  from {
+    transform: translateX(calc(var(--split-text-distance) * -1));
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes split-text-bloom {
+  from {
+    transform: scale(var(--split-text-scale, .7));
+    filter: blur(var(--split-text-blur, 2px));
+    opacity: 0;
+  }
+
+  to {
+    filter: blur();
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes split-text-spin-x {
+  from {
+    opacity: 0;
+    transform: rotateX(90deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: rotateX(0);
+  }
+}
+
+@keyframes split-text-spin-y {
+  from {
+    opacity: 0;
+    transform: rotateY(90deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: rotateY(0);
+  }
+}
+
+@keyframes split-text-magnetic {
+  from {
+    transform: translate(var(--split-text-mx, 10px), var(--split-text-my, 0));
+    filter: blur(var(--split-text-blur, 2px));
+    opacity: 0;
+  }
+
+  to {
+    filter: blur();
+    opacity: 1;
+    transform: translate(0);
+  }
+}
+
+split-text:not([split="chars"])[data-revealed] .split-text-word, split-text:not([split="chars"])[data-revealed] .split-text-word-inner {
+  display: contents;
+}
+
+split-text[split="chars"][data-revealed] .split-text-word, split-text[split="chars"][data-revealed] .split-text-char {
+  overflow: visible;
+}
+
+split-text[data-revealed] .split-text-word-inner, split-text[data-revealed] .split-text-char-inner {
+  filter: none;
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  split-text .split-text-word-inner, split-text .split-text-char-inner {
+    filter: none;
+    opacity: 1;
+    animation: none;
+    transform: none;
+  }
+}
+/*$vite$:1*/

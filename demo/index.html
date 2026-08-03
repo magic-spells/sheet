@@ -17,7 +17,7 @@
 		<meta property="og:title" content="@magic-spells/sheet" />
 		<meta
 			property="og:description"
-			content="Every edge, and a spring home. Bottom-sheet snap points, flicks that step exactly one, and a real spring carrying every landing." />
+			content="A sheet that magically morphs between shapes. Bottom-sheet snap points, flicks that step exactly one, and a real spring carrying every landing." />
 		<meta property="og:url" content="https://magic-spells.github.io/sheet/demo/" />
 		<meta name="twitter:card" content="summary" />
 		<!-- Inlined as a data URI so the repo stays binary-free and the browser's
@@ -34,6 +34,7 @@
 			rel="stylesheet" />
 
 		<link rel="stylesheet" href="./vendor/dialog-panel.css" />
+		<link rel="stylesheet" href="./vendor/split-text.css" />
 		<link rel="stylesheet" href="./dist/sheet.css" />
 
 		<script type="importmap">
@@ -333,7 +334,7 @@
 
 			.hero h1 {
 				position: relative;
-				max-width: 12ch;
+				max-width: 17ch;
 				margin-bottom: 1.5rem;
 				color: var(--cream);
 				font-family: var(--font-display);
@@ -341,12 +342,24 @@
 				font-weight: 300;
 				letter-spacing: -0.025em;
 				line-height: 0.95;
+				text-wrap: balance;
 			}
 
 			.hero h1 em {
 				color: var(--iris-text);
 				font-style: italic;
 				font-weight: 300;
+			}
+
+			/* split-text masks each word with an overflow:hidden inline-block whose
+			   height is the line box — and this h1 runs line-height: 0.95, tighter
+			   than the serif's own ascender-to-descender box. Left alone, the mask
+			   clips the descenders of "magically" and "shapes" for the length of
+			   the reveal. Padding extends the clip box down; the matching negative
+			   margin keeps the line positions the design already has. */
+			.hero h1 .split-text-word {
+				padding-bottom: 0.16em;
+				margin-bottom: -0.16em;
 			}
 
 			.hero-tagline {
@@ -1412,7 +1425,11 @@
 			</div>
 
 			<a class="hero-badge" href="https://github.com/magic-spells/sheet">@magic-spells/sheet</a>
-			<h1>Every edge, and a <em>spring</em> home.</h1>
+			<h1>
+				<split-text trigger="load" stagger="65" duration="1000"
+					>A sheet that <em>magically morphs</em> between shapes.</split-text
+				>
+			</h1>
 			<p class="hero-tagline">
 				Bottom, left, right, or a card floating clear of all four sides. Bottom-sheet snap points
 				you can drag between, flicks that step exactly one, and a real spring — not a transition —
@@ -1469,7 +1486,7 @@
 					<span class="spec-key">Snap</span>
 					<span class="spec-rule" aria-hidden="true"></span>
 				</div>
-				<h2>Three heights, and the sheet lands on one.</h2>
+				<h2>Snap points make the sheet easy to resize.</h2>
 				<p class="demo-desc">
 					<code>snap-points="20vh 55vh 90vh"</code> gives the sheet several resting heights — any
 					CSS length, re-measured on resize. Drag between them from the header, the footer, or the
@@ -3782,6 +3799,13 @@ sheet.hide();</pre>
 			// sheet.esm.js side-effect imports @magic-spells/dialog-panel itself;
 			// the importmap above points that bare specifier at the vendor copy.
 			import './dist/sheet.esm.js';
+
+			// Demo-only, and not a dependency of the sheet: it reveals the hero
+			// headline. Imported by path rather than through the importmap for
+			// exactly that reason — nothing in the library emits the bare
+			// specifier, and adding one would imply a dependency that isn't there.
+			// Self-registering, so the import is the whole wiring.
+			import './vendor/split-text.esm.js';
 
 			const $ = (selector, root = document) => root.querySelector(selector);
 
