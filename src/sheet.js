@@ -41,6 +41,24 @@ const OVERSCROLL_RESISTANCE = 0.2;
 const SCROLLABLE_OVERFLOW = new Set(['auto', 'scroll']);
 
 /**
+ * Where a scrim gesture began, and the reason it is three states rather than a
+ * boolean. `'none'` is not "did not begin on the scrim" — it is "no pointer
+ * sequence happened at all", which is a real case and must be allowed through.
+ *
+ * iOS Safari delivers a tap on a modal dialog's ::backdrop as a bare `click`
+ * (target `<dialog>`, `detail: 1`, `pointerType: 'mouse'`) with NO preceding
+ * `pointerdown` — measured on an iPhone with nothing registered on `document`,
+ * because any document-level pointer or touch listener makes WebKit emit the
+ * full sequence and hides this entirely. As a boolean, that tap was
+ * indistinguishable from a press inside the panel, so the guard refused it and
+ * backdrop dismissal was dead on iPhone and iPad while swipe-to-dismiss — which
+ * never touches the scrim — kept working and masked it.
+ */
+const SCRIM_PRESS_NONE = 'none';
+const SCRIM_PRESS_SCRIM = 'scrim';
+const SCRIM_PRESS_INSIDE = 'inside';
+
+/**
  * Snapshots the scroll geometry the claim policy reads. Cached at gesture start
  * rather than read per frame: native scrolling that outruns the snapshot fires
  * pointercancel, which abandons the drag anyway. Horizontal offsets are
@@ -173,7 +191,8 @@ class SheetPanel extends HTMLElement {
 	#dialogRef = null;
 	#gestures = [];
 	#scrollVeto = null;
-	#scrimPress = false;
+	#scrimPress = SCRIM_PRESS_NONE;
+	#scrimPressTimer = null;
 	#pointerlessClick = null;
 	#pointerlessArmed = false;
 	#pointerlessTimer = null;
@@ -337,7 +356,8 @@ class SheetPanel extends HTMLElement {
 			hidden: (event) => {
 				if (event.target !== _.#panelRef) return;
 				_.#drag = { active: false };
-				_.#scrimPress = false;
+				_.#clearScrimPressTimer();
+				_.#scrimPress = SCRIM_PRESS_NONE;
 				_.#proxyRevealed = false;
 				// The force-close paths (stop(), a native close repair) emit no
 				// beforeHide, so this is the only hook that can clear a #waitForMorph
@@ -363,7 +383,42 @@ class SheetPanel extends HTMLElement {
 			// a press inside the panel that releases on the scrim arrives retargeted
 			// to the dialog and looks identical to a tap. See #outsideGuard.
 			scrimPress: (event) => {
-				_.#scrimPress = event.target === _.#dialogRef;
+				// A release may already have scheduled this press's expiry; a new press
+				// owns the state outright, so cancel it or the pending timer would wipe
+				// THIS press and wave through the retargeted click it exists to refuse.
+				_.#clearScrimPressTimer();
+				_.#scrimPress =
+					event.target === _.#dialogRef ? SCRIM_PRESS_SCRIM : SCRIM_PRESS_INSIDE;
+			},
+			// A pointerdown does NOT guarantee a click, and #outsideGuard's finally is
+			// the only thing that consumes one. Native scrolling inside the content
+			// fires pointercancel and no click; a claimed drag can end with the click
+			// suppressed by movement. Either way a stale 'inside' survives, and the
+			// next scrim tap — which on iOS is a bare click with no pointerdown to
+			// re-arm the state — is refused. That is the original bug, back on the
+			// first tap after any scroll.
+			//
+			// The two releases are deliberately not symmetric, so they are two
+			// handlers rather than one that switches on the event type.
+			//
+			// pointerup clears on a MACROTASK, never synchronously: the retargeted
+			// click of an inside-press/outside-release arrives after pointerup and
+			// must still be refused, and a macrotask is the first point after that
+			// whole dispatch has run. Same reasoning as #pointerlessTimer, and the
+			// same trap — a microtask is drained between listener callbacks and would
+			// expire before the click was ever judged by it.
+			scrimRelease: () => {
+				_.#clearScrimPressTimer();
+				_.#scrimPressTimer = setTimeout(() => {
+					_.#scrimPressTimer = null;
+					_.#scrimPress = SCRIM_PRESS_NONE;
+				}, 0);
+			},
+			// pointercancel clears IMMEDIATELY. No click can follow a cancelled
+			// stream, so there is nothing left to judge and nothing to defer for.
+			scrimCancel: () => {
+				_.#clearScrimPressTimer();
+				_.#scrimPress = SCRIM_PRESS_NONE;
 			},
 			// Bubble phase on the panel, which is the one node strictly between any
 			// control inside the sheet and the dialog dialog-panel listens on. Passing
@@ -416,11 +471,23 @@ class SheetPanel extends HTMLElement {
 					// deliberately not the same question. The policy may forbid backdrop
 					// dismissal outright; and a gesture that started on panel content is a
 					// selection or a mis-drag, never a tap, however far out it let go.
-					if (!_.dismissPolicy.backdrop || !_.#scrimPress) event.stopPropagation();
+					//
+					// Only `'inside'` refuses. `'none'` — no pointerdown reached this
+					// guard at all — must pass: that is how iOS Safari delivers a scrim
+					// tap, as a bare click with no pointer sequence in front of it. The
+					// boolean this replaced collapsed `'none'` and `'inside'` together
+					// and so refused every backdrop tap on iPhone and iPad.
+					if (!_.dismissPolicy.backdrop || _.#scrimPress === SCRIM_PRESS_INSIDE) {
+						event.stopPropagation();
+					}
 				} finally {
 					// A click is the terminal event for exactly one press. Keeping this
-					// bit beyond it made the next click inherit stale gesture history.
-					_.#scrimPress = false;
+					// beyond it made the next click inherit stale gesture history — and
+					// resetting to `'none'` rather than `'inside'` is what leaves the
+					// pointerless tap that follows free to dismiss. The click consumed
+					// the press, so the release's pending expiry has nothing left to do.
+					_.#clearScrimPressTimer();
+					_.#scrimPress = SCRIM_PRESS_NONE;
 				}
 			},
 			// A native close — <form method="dialog"> or app-level dialog.close() —
@@ -566,6 +633,10 @@ class SheetPanel extends HTMLElement {
 			// phase for the same reason: it has to observe the press even when a
 			// surface's own gesture stops propagation later.
 			_.#panelRef.addEventListener('pointerdown', _.#handlers.scrimPress, true);
+			// Both releases, because a press that never becomes a click must not
+			// strand its origin on the guard. See scrimRelease.
+			_.#panelRef.addEventListener('pointerup', _.#handlers.scrimRelease, true);
+			_.#panelRef.addEventListener('pointercancel', _.#handlers.scrimCancel, true);
 			_.#panelRef.addEventListener('click', _.#handlers.outsideGuard, true);
 		}
 		// On the panel, not the dialog-panel: it has to sit BELOW dialog-panel's own
@@ -612,6 +683,7 @@ class SheetPanel extends HTMLElement {
 		// attribute, which sits on markup this component does not own.
 		_.#clearMorphTimers();
 		_.#clearTriggerReturn();
+		_.#clearScrimPressTimer();
 		_.#contentObserver?.disconnect();
 		_.#contentObserver = null;
 		clearTimeout(_.#contentRemeasureTimer);
@@ -640,6 +712,8 @@ class SheetPanel extends HTMLElement {
 			_.#panelRef.removeEventListener('shown', _.#handlers.shown);
 			_.#panelRef.removeEventListener('hidden', _.#handlers.hidden);
 			_.#panelRef.removeEventListener('pointerdown', _.#handlers.scrimPress, true);
+			_.#panelRef.removeEventListener('pointerup', _.#handlers.scrimRelease, true);
+			_.#panelRef.removeEventListener('pointercancel', _.#handlers.scrimCancel, true);
 			_.#panelRef.removeEventListener('click', _.#handlers.outsideGuard, true);
 			_.#panelRef.style.removeProperty('--sheet-progress');
 			_.#panelRef.style.removeProperty('--sheet-backdrop-progress');
@@ -1917,6 +1991,13 @@ class SheetPanel extends HTMLElement {
 		clearTimeout(_.#morph.timer);
 		_.#morph.dialog.removeEventListener('transitionend', _.#morph.onEnd);
 		_.#morph = null;
+	}
+
+	#clearScrimPressTimer() {
+		const _ = this;
+		if (_.#scrimPressTimer === null) return;
+		clearTimeout(_.#scrimPressTimer);
+		_.#scrimPressTimer = null;
 	}
 
 	#readBox(element) {

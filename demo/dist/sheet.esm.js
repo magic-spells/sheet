@@ -2286,6 +2286,23 @@ var FLICK_VELOCITY = .5;
 var OVERSCROLL_RESISTANCE = .2;
 var SCROLLABLE_OVERFLOW = /* @__PURE__ */ new Set(["auto", "scroll"]);
 /**
+* Where a scrim gesture began, and the reason it is three states rather than a
+* boolean. `'none'` is not "did not begin on the scrim" — it is "no pointer
+* sequence happened at all", which is a real case and must be allowed through.
+*
+* iOS Safari delivers a tap on a modal dialog's ::backdrop as a bare `click`
+* (target `<dialog>`, `detail: 1`, `pointerType: 'mouse'`) with NO preceding
+* `pointerdown` — measured on an iPhone with nothing registered on `document`,
+* because any document-level pointer or touch listener makes WebKit emit the
+* full sequence and hides this entirely. As a boolean, that tap was
+* indistinguishable from a press inside the panel, so the guard refused it and
+* backdrop dismissal was dead on iPhone and iPad while swipe-to-dismiss — which
+* never touches the scrim — kept working and masked it.
+*/
+var SCRIM_PRESS_NONE = "none";
+var SCRIM_PRESS_SCRIM = "scrim";
+var SCRIM_PRESS_INSIDE = "inside";
+/**
 * Snapshots the scroll geometry the claim policy reads. Cached at gesture start
 * rather than read per frame: native scrolling that outruns the snapshot fires
 * pointercancel, which abandons the drag anyway. Horizontal offsets are
@@ -2411,7 +2428,8 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#dialogRef = null;
 	#gestures = [];
 	#scrollVeto = null;
-	#scrimPress = false;
+	#scrimPress = SCRIM_PRESS_NONE;
+	#scrimPressTimer = null;
 	#pointerlessClick = null;
 	#pointerlessArmed = false;
 	#pointerlessTimer = null;
@@ -2508,7 +2526,8 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			hidden: (event) => {
 				if (event.target !== _.#panelRef) return;
 				_.#drag = { active: false };
-				_.#scrimPress = false;
+				_.#clearScrimPressTimer();
+				_.#scrimPress = SCRIM_PRESS_NONE;
 				_.#proxyRevealed = false;
 				_.#finishMorph();
 				_.#setProgress(0);
@@ -2520,7 +2539,19 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 				event.stopPropagation();
 			},
 			scrimPress: (event) => {
-				_.#scrimPress = event.target === _.#dialogRef;
+				_.#clearScrimPressTimer();
+				_.#scrimPress = event.target === _.#dialogRef ? SCRIM_PRESS_SCRIM : SCRIM_PRESS_INSIDE;
+			},
+			scrimRelease: () => {
+				_.#clearScrimPressTimer();
+				_.#scrimPressTimer = setTimeout(() => {
+					_.#scrimPressTimer = null;
+					_.#scrimPress = SCRIM_PRESS_NONE;
+				}, 0);
+			},
+			scrimCancel: () => {
+				_.#clearScrimPressTimer();
+				_.#scrimPress = SCRIM_PRESS_NONE;
 			},
 			pointerlessArm: (event) => {
 				if (event.target === _.#pointerlessClick) _.#pointerlessArmed = true;
@@ -2541,9 +2572,10 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 					}
 					const rect = _.#dialogRef.getBoundingClientRect();
 					if (!(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) return;
-					if (!_.dismissPolicy.backdrop || !_.#scrimPress) event.stopPropagation();
+					if (!_.dismissPolicy.backdrop || _.#scrimPress === SCRIM_PRESS_INSIDE) event.stopPropagation();
 				} finally {
-					_.#scrimPress = false;
+					_.#clearScrimPressTimer();
+					_.#scrimPress = SCRIM_PRESS_NONE;
 				}
 			},
 			close: () => {
@@ -2618,6 +2650,8 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#panelRef.addEventListener("shown", _.#handlers.shown);
 			_.#panelRef.addEventListener("hidden", _.#handlers.hidden);
 			_.#panelRef.addEventListener("pointerdown", _.#handlers.scrimPress, true);
+			_.#panelRef.addEventListener("pointerup", _.#handlers.scrimRelease, true);
+			_.#panelRef.addEventListener("pointercancel", _.#handlers.scrimCancel, true);
 			_.#panelRef.addEventListener("click", _.#handlers.outsideGuard, true);
 		}
 		_.addEventListener("click", _.#handlers.pointerlessArm);
@@ -2645,6 +2679,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#handlers.resize.cancel();
 		_.#clearMorphTimers();
 		_.#clearTriggerReturn();
+		_.#clearScrimPressTimer();
 		_.#contentObserver?.disconnect();
 		_.#contentObserver = null;
 		clearTimeout(_.#contentRemeasureTimer);
@@ -2668,6 +2703,8 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#panelRef.removeEventListener("shown", _.#handlers.shown);
 			_.#panelRef.removeEventListener("hidden", _.#handlers.hidden);
 			_.#panelRef.removeEventListener("pointerdown", _.#handlers.scrimPress, true);
+			_.#panelRef.removeEventListener("pointerup", _.#handlers.scrimRelease, true);
+			_.#panelRef.removeEventListener("pointercancel", _.#handlers.scrimCancel, true);
 			_.#panelRef.removeEventListener("click", _.#handlers.outsideGuard, true);
 			_.#panelRef.style.removeProperty("--sheet-progress");
 			_.#panelRef.style.removeProperty("--sheet-backdrop-progress");
@@ -3579,6 +3616,12 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		clearTimeout(_.#morph.timer);
 		_.#morph.dialog.removeEventListener("transitionend", _.#morph.onEnd);
 		_.#morph = null;
+	}
+	#clearScrimPressTimer() {
+		const _ = this;
+		if (_.#scrimPressTimer === null) return;
+		clearTimeout(_.#scrimPressTimer);
+		_.#scrimPressTimer = null;
 	}
 	#readBox(element) {
 		const rect = element.getBoundingClientRect();

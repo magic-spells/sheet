@@ -89,6 +89,134 @@ function makeSheet({ morphTrigger = false } = {}) {
 	return { dialog, engine: panel.morphEngine, panel, sheet };
 }
 
+/**
+ * Fires an outside click on the scrim and reports whether #outsideGuard refused
+ * it. Refusal is `stopPropagation()`, which is what keeps the click from
+ * reaching dialog-panel's own bubble-phase dismissal.
+ * @param {Object} panel - dialog-panel stub.
+ * @param {Object} dialog - dialog stub, whose rect defines "outside".
+ * @returns {boolean} True when the guard let the click through.
+ */
+function scrimClickAllowed(panel, dialog) {
+	// Well outside the dialog rect on every axis, and detail:1 so this is not
+	// mistaken for the pointerless keyboard/programmatic branch.
+	const event = panel.fire('click', {
+		target: dialog,
+		detail: 1,
+		clientX: 10,
+		clientY: -50,
+	});
+	return !event.propagationStopped;
+}
+
+// iOS Safari delivers a scrim tap as a bare `click` with NO preceding
+// pointerdown — measured on an iPhone with nothing registered on `document`,
+// since any document-level pointer or touch listener makes WebKit emit the full
+// sequence and hides this. #scrimPress was a boolean, so that tap was
+// indistinguishable from a press that began inside the panel, and the guard
+// refused it: backdrop dismissal was dead on iPhone and iPad while
+// swipe-to-dismiss, which never touches the scrim, kept working and masked it.
+//
+// The three cases are asserted together because the bug was precisely two of
+// them collapsing into one value.
+elementTest('a scrim click with no preceding pointerdown is allowed through', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	assert.equal(scrimClickAllowed(panel, dialog), true);
+});
+
+elementTest('a scrim click preceded by a press ON the scrim is allowed through', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	panel.fire('pointerdown', { target: dialog });
+
+	assert.equal(scrimClickAllowed(panel, dialog), true);
+});
+
+// The case the guard exists for: selecting text in the sheet and releasing past
+// its edge retargets the click to the dialog, where it is indistinguishable from
+// a tap by target or geometry. Only the press position tells them apart.
+elementTest('a click whose press began INSIDE the panel is still refused', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	panel.fire('pointerdown', { target: new StubElement('sheet-content') });
+
+	assert.equal(scrimClickAllowed(panel, dialog), false);
+});
+
+// A click is terminal for exactly one press, so the refusal must not outlive it
+// — otherwise the pointerless tap that follows inherits 'inside' and the iOS bug
+// comes straight back on the second interaction.
+elementTest('an inside press does not refuse the NEXT pointerless click', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	panel.fire('pointerdown', { target: new StubElement('sheet-content') });
+	assert.equal(scrimClickAllowed(panel, dialog), false);
+
+	assert.equal(scrimClickAllowed(panel, dialog), true, 'the state reset to none');
+});
+
+// #outsideGuard's finally is the only consumer of a press, and it needs a click
+// to run — but a pointerdown does not guarantee one. Native scrolling inside the
+// content cancels the stream outright, and a claimed drag can end with the click
+// suppressed by movement. A press stranded that way refuses the NEXT scrim tap,
+// which on iOS carries no pointerdown to re-arm the state — so the original bug
+// returns on the first tap after any scroll.
+elementTest('a cancelled inside press does not refuse the next scrim tap', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	panel.fire('pointerdown', { target: new StubElement('sheet-content') });
+	panel.fire('pointercancel', { target: new StubElement('sheet-content') });
+
+	assert.equal(scrimClickAllowed(panel, dialog), true);
+});
+
+elementTest('an inside press released without a click expires', async (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	panel.fire('pointerdown', { target: new StubElement('sheet-content') });
+	panel.fire('pointerup', { target: new StubElement('sheet-content') });
+	await new Promise((resolve) => setTimeout(resolve, 0));
+
+	assert.equal(scrimClickAllowed(panel, dialog), true);
+});
+
+// The reason the pointerup path defers instead of clearing outright, and the
+// case that would silently break if it did: the retargeted click of an
+// inside-press/outside-release arrives AFTER pointerup, and is exactly what the
+// guard exists to refuse. Expiring synchronously would wave through every
+// text-selection drag that let go past the panel's edge.
+elementTest('a click arriving after pointerup is still judged by its press', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	panel.fire('pointerdown', { target: new StubElement('sheet-content') });
+	panel.fire('pointerup', { target: new StubElement('sheet-content') });
+
+	assert.equal(scrimClickAllowed(panel, dialog), false, 'the press has not expired yet');
+});
+
+// A pending expiry belongs to the press that scheduled it. Left armed across a
+// new press it would fire mid-gesture and hand the guard a 'none' it never saw,
+// waving through the very release the guard exists to refuse.
+elementTest('a new press cancels the previous release expiry', async (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	panel.fire('pointerdown', { target: new StubElement('sheet-content') });
+	panel.fire('pointerup', { target: new StubElement('sheet-content') });
+	panel.fire('pointerdown', { target: new StubElement('sheet-content') });
+	await new Promise((resolve) => setTimeout(resolve, 0));
+
+	assert.equal(scrimClickAllowed(panel, dialog), false, 'the new press still owns the state');
+});
+
 elementTest('show passes the trigger straight through — never substituting the sheet', (t) => {
 	const { panel, sheet } = makeSheet();
 	t.after(() => sheet.disconnectedCallback());
@@ -1665,10 +1793,17 @@ elementTest('the pointerless source expires after the click dispatch task', asyn
 	assert.equal(panel.fire('beforeHide').defaultPrevented, false, 'released on the next task');
 });
 
+// Driven by an INSIDE press rather than a scrim one. The press states are now
+// three, and 'none' and 'scrim' produce the same allowed outcome — so the only
+// leak with a visible consequence is an 'inside' press surviving into a later
+// click, where it would refuse a genuine scrim tap. The intent is unchanged from
+// when this was written against the boolean: a press belongs to exactly one
+// click, and `hidden` ends the run that owns it.
 elementTest('each click and outer hidden event consume their own scrim press', (t) => {
 	const { dialog, panel, sheet } = makeSheet();
 	t.after(() => sheet.disconnectedCallback());
 	const button = new StubElement('button');
+	const inside = new StubElement('sheet-content');
 	dialog.rect = {
 		top: 360,
 		left: 0,
@@ -1678,22 +1813,22 @@ elementTest('each click and outer hidden event consume their own scrim press', (
 		height: 540,
 	};
 
-	panel.fire('pointerdown', { target: dialog });
+	panel.fire('pointerdown', { target: inside });
 	assert.equal(
 		panel.fire('click', { target: button, detail: 0, clientX: 0, clientY: 0 }).propagationStopped,
 		false
 	);
 	assert.equal(
 		panel.fire('click', { target: dialog, detail: 1, clientX: 0, clientY: 0 }).propagationStopped,
-		true,
+		false,
 		'the next click cannot inherit the consumed press'
 	);
 
-	panel.fire('pointerdown', { target: dialog });
+	panel.fire('pointerdown', { target: inside });
 	panel.fire('hidden');
 	assert.equal(
 		panel.fire('click', { target: dialog, detail: 1, clientX: 0, clientY: 0 }).propagationStopped,
-		true,
+		false,
 		"a reopened panel cannot inherit the previous run's press"
 	);
 });
