@@ -3172,3 +3172,96 @@ test('a resize landing inside a hide→show reversal retargets it instead of res
 	assert.notEqual(exitPose, undefined);
 	engine.destroy();
 });
+
+// The direct exit is the one close that never morphs back, so MorphEngine's own
+// source crossfade never runs and a plain stop() restored the button on frame 0
+// of an exit that had not started — it then sat at full opacity under a scrim
+// still up, which read as popping into existence at the end.
+test('a swipe exit holds the trigger back and hands it over at the hidden settle', async (t) => {
+	const frames = captureFrames(t);
+	MorphEngine.instances.length = 0;
+	const engine = makeEngine();
+	const trigger = new StubElement('button');
+	const dialog = new StubElement('dialog');
+	engine.armMorph(trigger);
+	void engine.show({ to: dialog });
+	MorphEngine.instances.at(-1).step(1);
+
+	const returned = [];
+	engine.on('triggerreturn', ({ trigger: element }) => {
+		returned.push({ element, visibility: element.style.getPropertyValue('visibility') });
+	});
+
+	engine.armGestureExit();
+	const hiding = engine.hide();
+
+	assert.equal(
+		trigger.style.getPropertyValue('visibility'),
+		'hidden',
+		'the trigger stays held for the whole exit'
+	);
+	assert.equal(returned.length, 0, 'and nothing is announced before the settle');
+
+	drainFrames(frames);
+	await hiding;
+
+	assert.equal(returned.length, 1, 'announced exactly once');
+	assert.equal(returned[0].element, trigger);
+	// The emit precedes the restore so a listener can decorate a button that
+	// cannot yet paint. Asserting the visibility SEEN BY THE LISTENER is what
+	// pins that ordering — checking it after the fact would pass either way.
+	assert.equal(
+		returned[0].visibility,
+		'hidden',
+		'the emit lands before the restore, so no frame shows an undecorated button'
+	);
+	assert.equal(
+		trigger.style.getPropertyValue('visibility'),
+		'',
+		'and the page owns its trigger again once the listener has run'
+	);
+	engine.destroy();
+});
+
+test('a force close hands the held trigger back with no entrance to announce', () => {
+	MorphEngine.instances.length = 0;
+	const engine = makeEngine();
+	const trigger = new StubElement('button');
+	const dialog = new StubElement('dialog');
+	engine.armMorph(trigger);
+	void engine.show({ to: dialog });
+	MorphEngine.instances.at(-1).step(1);
+
+	let announced = 0;
+	engine.on('triggerreturn', () => announced++);
+
+	engine.armGestureExit();
+	void engine.hide();
+	assert.equal(trigger.style.getPropertyValue('visibility'), 'hidden', 'held mid-exit');
+
+	engine.stop();
+
+	assert.equal(announced, 0, 'a force close paints no frame and has no beat to add');
+	assert.equal(
+		trigger.style.getPropertyValue('visibility'),
+		'',
+		'but it must never strand a consumer button invisible'
+	);
+	engine.destroy();
+});
+
+test('destroy hands back a trigger held by an exit that never finished', () => {
+	MorphEngine.instances.length = 0;
+	const engine = makeEngine();
+	const trigger = new StubElement('button');
+	const dialog = new StubElement('dialog');
+	engine.armMorph(trigger);
+	void engine.show({ to: dialog });
+	MorphEngine.instances.at(-1).step(1);
+	engine.armGestureExit();
+	void engine.hide();
+
+	engine.destroy();
+
+	assert.equal(trigger.style.getPropertyValue('visibility'), '');
+});

@@ -570,7 +570,7 @@ elementTest(
 	}
 );
 
-elementTest('a swipe close releases the blob before the exact spring exit', (t) => {
+elementTest('a swipe close releases the blob but holds the trigger until the exit lands', (t) => {
 	const frames = captureFrames(t);
 	const { dialog, engine, panel, sheet } = makeMorphSheet(t);
 	const trigger = makeTrigger();
@@ -588,13 +588,20 @@ elementTest('a swipe close releases the blob before the exact spring exit', (t) 
 	assert.equal(panel.hideModes[0], true);
 	assert.equal(
 		trigger.style.getPropertyValue('visibility'),
-		'',
-		'trigger is restored before the first spring frame'
+		'hidden',
+		'the trigger is held back while the panel and scrim are still on screen'
 	);
 	assert.equal(blobsInBody().length, 0, 'the blob is released before the spring starts');
 	assert.ok(frames.length > 0, 'the configured exit spring owns the dismissal');
 	drainFrames(frames);
 	assert.equal(engine.state, 'hidden');
+	assert.equal(
+		trigger.style.getPropertyValue('visibility'),
+		'',
+		'and handed back only once both are gone'
+	);
+	// Unchanged, and it must stay that way: the hold has no business perturbing
+	// the exit geometry.
 	assert.equal(exitTransforms.at(-1), 'translate3d(0px, 708px, 0px) scale(1)');
 });
 
@@ -743,11 +750,16 @@ elementTest('a vanished close trigger releases the blob and takes the direct spr
 	assert.equal(trigger.style.visibility, 'hidden');
 	sheet.hide();
 	assert.equal(panel.hideModes[0], true);
-	assert.equal(trigger.style.getPropertyValue('visibility'), '');
+	// The same hold as a swipe close: this route never morphs back either, so the
+	// trigger waits out the exit rather than being restored into a lit scrim.
+	assert.equal(trigger.style.getPropertyValue('visibility'), 'hidden');
 	assert.equal(blobsInBody().length, 0);
 	assert.ok(frames.length > 0);
 	drainFrames(frames);
 	assert.equal(engine.state, 'hidden');
+	// Detached is not exempt: restoring a detached element is harmless, and the
+	// hold must never be the thing that strands a button the page reattaches.
+	assert.equal(trigger.style.getPropertyValue('visibility'), '');
 });
 
 // The other half of the hidden-trigger gate. MorphEngine hides the source for
@@ -1802,4 +1814,123 @@ elementTest('a hide vetoed mid-drag hands the gesture back instead of freezing i
 	assert.equal(engine.activeSnap, 0, 'the release settles onto a real snap');
 	assert.equal(engine.currentSize, 200, 'and lands on it rather than freezing mid-drag');
 	assert.equal(panel.isOpen, true, 'with the sheet still open, since the hide was refused');
+});
+
+function swipeClosed(sheet) {
+	sheet.fire('pointerdown', pointer());
+	sheet.fire('pointermove', pointer({ clientY: 420, timeStamp: 40 }));
+	sheet.fire('pointerup', pointer({ clientY: 420, timeStamp: 60 }));
+}
+
+elementTest('a swiped-away trigger is decorated for its pop once the exit lands', (t) => {
+	const frames = captureFrames(t);
+	const { engine, sheet } = makeMorphSheet(t);
+	const trigger = makeTrigger();
+	sheet.show(trigger);
+	currentBlob().step(1);
+
+	swipeClosed(sheet);
+	assert.equal(trigger.hasAttribute('sheet-return'), false, 'nothing while the exit runs');
+
+	drainFrames(frames);
+
+	assert.equal(engine.state, 'hidden');
+	assert.equal(trigger.hasAttribute('sheet-return'), true, 'decorated at the settle');
+	assert.equal(trigger.style.getPropertyValue('visibility'), '', 'and visible again');
+
+	trigger.fire('animationend');
+	assert.equal(
+		trigger.hasAttribute('sheet-return'),
+		false,
+		'the component never leaves state on markup it does not own'
+	);
+	assert.equal(trigger.listeners.has('animationend'), false, 'nor a listener behind it');
+});
+
+// Zero is both the opt-out and the reduced-motion policy, and it must create no
+// animation at all rather than a zero-length one — matching how a zeroed profile
+// morph collapses to an instant swap instead of awaiting a dead transition.
+elementTest('a zero return duration restores the trigger with nothing to wait on', (t) => {
+	const frames = captureFrames(t);
+	const { sheet } = makeMorphSheet(t);
+	const trigger = makeTrigger();
+	trigger.style.setProperty('--sheet-trigger-return-duration', '0ms');
+	sheet.show(trigger);
+	currentBlob().step(1);
+
+	swipeClosed(sheet);
+	drainFrames(frames);
+
+	assert.equal(trigger.hasAttribute('sheet-return'), false, 'no attribute is ever written');
+	assert.equal(trigger.listeners.has('animationend'), false, 'and nothing is scheduled');
+	assert.equal(trigger.style.getPropertyValue('visibility'), '', 'but the button still returns');
+});
+
+// #usableTriggerBox reads COMPUTED opacity, and during the pop that is the
+// animation's own `from: 0` — so a reopen from the same trigger read the
+// component's own entrance as a trigger the page had hidden and silently
+// dropped the morph. By hand that window is a frame; programmatically it is
+// every time, because #returnTrigger sets the attribute BEFORE `hidden` is
+// emitted, so any show() from a hidden listener lands inside it.
+//
+// The DOM-free stub returns INLINE opacity and so cannot reproduce the misread
+// itself — asserting the morph still arms here would pass with or without the
+// fix. What this pins is the mechanism: the pop is gone before the arm gate.
+elementTest('reopening from a popping trigger clears the pop before the arm gate', (t) => {
+	const frames = captureFrames(t);
+	const { sheet } = makeMorphSheet(t);
+	const trigger = makeTrigger();
+	sheet.show(trigger);
+	currentBlob().step(1);
+
+	swipeClosed(sheet);
+	drainFrames(frames);
+	assert.equal(trigger.hasAttribute('sheet-return'), true, 'the pop is running');
+
+	sheet.show(trigger);
+
+	assert.equal(
+		trigger.hasAttribute('sheet-return'),
+		false,
+		'and is gone before the morph is classified'
+	);
+	assert.equal(trigger.listeners.has('animationend'), false, 'with nothing left behind');
+});
+
+// A pop on a DIFFERENT button is not this run's business — clearing it would
+// abort an unrelated element's animation to fix a probe that never reads it.
+elementTest('reopening from another trigger leaves the first one popping', (t) => {
+	const frames = captureFrames(t);
+	const { sheet } = makeMorphSheet(t);
+	const first = makeTrigger();
+	const second = makeTrigger();
+	sheet.show(first);
+	currentBlob().step(1);
+
+	swipeClosed(sheet);
+	drainFrames(frames);
+	assert.equal(first.hasAttribute('sheet-return'), true);
+
+	sheet.show(second);
+
+	assert.equal(first.hasAttribute('sheet-return'), true, 'the first button finishes its pop');
+});
+
+elementTest('teardown mid-pop clears the attribute and its safety timer', (t) => {
+	const frames = captureFrames(t);
+	const { sheet } = makeMorphSheet(t);
+	const trigger = makeTrigger();
+	sheet.show(trigger);
+	currentBlob().step(1);
+
+	swipeClosed(sheet);
+	drainFrames(frames);
+	assert.equal(trigger.hasAttribute('sheet-return'), true);
+
+	sheet.disconnectedCallback();
+
+	assert.equal(trigger.hasAttribute('sheet-return'), false);
+	// A surviving timer would fire into a torn-down component and keep the
+	// node:test event loop alive past the run.
+	assert.equal(trigger.listeners.has('animationend'), false, 'and its listener is gone');
 });

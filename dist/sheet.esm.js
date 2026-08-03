@@ -1111,6 +1111,7 @@ var SheetEngine = class extends EventEmitter {
 	#morphTrigger = null;
 	#blobTo = null;
 	#gestureExit = false;
+	#heldTrigger = null;
 	#triggerProbe;
 	/**
 	* @param {Object} [options] - Spring tuning. Each run retunes the spring
@@ -1594,6 +1595,7 @@ var SheetEngine = class extends EventEmitter {
 	stop() {
 		const _ = this;
 		if (_.#blobEngine && _.#blobEngine.state !== "idle") _.#blobEngine.stop();
+		_.#returnTrigger(false);
 		_.#blobTo = null;
 		_.#morphTrigger = null;
 		_.#gestureExit = false;
@@ -1718,6 +1720,7 @@ var SheetEngine = class extends EventEmitter {
 		_.#state = "hidden";
 		_.#phase = "hidden";
 		_.#p = 0;
+		_.#returnTrigger(true);
 		_.#restoreInline();
 		_.emit("hidden");
 	}
@@ -1998,10 +2001,29 @@ var SheetEngine = class extends EventEmitter {
 	}
 	#releaseBlob() {
 		const _ = this;
-		if (_.#blobEngine && _.#blobEngine.state !== "idle") _.#blobEngine.stop();
+		if (_.#morphTrigger) _.#heldTrigger = _.#morphTrigger;
+		if (_.#blobEngine && _.#blobEngine.state !== "idle") _.#blobEngine.stop({ restoreSource: false });
 		_.#blobTo = null;
 		_.#morphTrigger = null;
 		_.#applyFrame(_.#p);
+	}
+	/**
+	* Hands a held trigger back to the page at the end of a direct exit.
+	*
+	* The emit precedes the restore deliberately: a listener decorates the button
+	* while it still cannot paint, so no frame exists in which it is visible and
+	* undecorated. Stating that order here makes it structural, rather than a
+	* consequence of which listener happened to be registered first.
+	* @param {boolean} announce - Emit `triggerreturn` first. False on a force
+	*   close, which paints no frame and so has no entrance to introduce.
+	*/
+	#returnTrigger(announce) {
+		const _ = this;
+		const trigger = _.#heldTrigger;
+		if (!trigger) return;
+		_.#heldTrigger = null;
+		if (announce) _.emit("triggerreturn", { trigger });
+		_.#blobEngine?.restoreSource();
 	}
 	#finishBlobShown() {
 		const _ = this;
@@ -2403,6 +2425,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#pendingProfile = null;
 	#contentObserver = null;
 	#contentRemeasureTimer = null;
+	#triggerReturn = null;
 	#handlers;
 	static get observedAttributes() {
 		return [
@@ -2465,6 +2488,22 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 				_.#setProgress(1);
 				_.#flushPendingProfile();
 				_.#syncContentObserver();
+			},
+			triggerReturn: ({ trigger }) => {
+				if (!trigger?.isConnected) return;
+				const duration = _.#durationToken(trigger, "--sheet-trigger-return-duration", 280);
+				if (duration <= 0) return;
+				_.#clearTriggerReturn();
+				const finish = () => _.#clearTriggerReturn();
+				_.#triggerReturn = {
+					trigger,
+					onEnd: (event) => {
+						if (event.target === trigger) finish();
+					},
+					timer: setTimeout(finish, duration + MORPH_TIMEOUT_PADDING_MS)
+				};
+				trigger.addEventListener("animationend", _.#triggerReturn.onEnd);
+				trigger.setAttribute("sheet-return", "");
 			},
 			hidden: (event) => {
 				if (event.target !== _.#panelRef) return;
@@ -2568,6 +2607,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#engine.on("snapchange", _.#handlers.snapchange);
 		_.#engine.on("change", _.#handlers.change);
 		_.#engine.on("reveal", _.#handlers.reveal);
+		_.#engine.on("triggerreturn", _.#handlers.triggerReturn);
 		_.#syncSpring();
 		_.setAttribute("engine", "");
 		if (_.#panelRef) {
@@ -2604,6 +2644,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		document.removeEventListener("cancel", _.#handlers.escapeGuard, true);
 		_.#handlers.resize.cancel();
 		_.#clearMorphTimers();
+		_.#clearTriggerReturn();
 		_.#contentObserver?.disconnect();
 		_.#contentObserver = null;
 		clearTimeout(_.#contentRemeasureTimer);
@@ -2634,6 +2675,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#engine?.off("change", _.#handlers.change);
 		_.#engine?.off("snapchange", _.#handlers.snapchange);
 		_.#engine?.off("reveal", _.#handlers.reveal);
+		_.#engine?.off("triggerreturn", _.#handlers.triggerReturn);
 		_.#engine?.destroy();
 		if (_.#panelRef?.morphEngine === _.#engine) _.#panelRef.morphEngine = null;
 		_.#engine = null;
@@ -2658,6 +2700,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	show(triggerEl) {
 		const _ = this;
 		if (window.innerWidth > _.maxDisplayWidth) return false;
+		if (_.#triggerReturn?.trigger === triggerEl) _.#clearTriggerReturn();
 		_.#prepareOpen();
 		const dialog = _.#dialogRef;
 		const morph = _.morphsFromTrigger && !!triggerEl && !!dialog && _.#morphDuration(dialog) > 0 && !!_.#usableTriggerBox(triggerEl);
@@ -3604,24 +3647,51 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#morphInline = null;
 	}
 	/**
-	* Resolves the morph duration in milliseconds from the CSS token.
+	* Resolves a CSS duration token to milliseconds.
 	*
-	* The reduced-motion CSS declaration can lose the cascade to a later or
-	* more specific consumer token. Reading the preference here too prevents
-	* that override from restoring both the profile FLIP and trigger blob.
+	* The reduced-motion CSS declaration can lose the cascade to a later or more
+	* specific consumer token. Reading the preference here too prevents that
+	* override from restoring motion the user asked not to see — which is why
+	* every duration token in this component routes through one parser rather
+	* than a second copy of this parse.
+	* @param {HTMLElement} element - Element carrying the token.
+	* @param {string} name - Custom property name.
+	* @param {number} fallback - Milliseconds used when the token will not parse.
+	* @returns {number} Duration in milliseconds.
+	*/
+	#durationToken(element, name, fallback) {
+		if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return 0;
+		const raw = getComputedStyle(element).getPropertyValue(name).trim();
+		const zero = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i);
+		if (zero && Number(zero[1]) === 0) return 0;
+		const match = raw.match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
+		if (!match) return fallback;
+		const value = Number(match[1]);
+		if (!Number.isFinite(value)) return fallback;
+		return match[2].toLowerCase() === "ms" ? value : value * 1e3;
+	}
+	/**
+	* Resolves the morph duration in milliseconds from the CSS token. Governs both
+	* the profile FLIP and the trigger blob's arm gate.
 	* @param {HTMLElement} dialog - Dialog carrying the token.
 	* @returns {number} Duration in milliseconds.
 	*/
 	#morphDuration(dialog) {
-		if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return 0;
-		const raw = getComputedStyle(dialog).getPropertyValue("--sheet-morph-duration").trim();
-		const zero = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i);
-		if (zero && Number(zero[1]) === 0) return 0;
-		const match = raw.match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
-		if (!match) return 600;
-		const value = Number(match[1]);
-		if (!Number.isFinite(value)) return 600;
-		return match[2].toLowerCase() === "ms" ? value : value * 1e3;
+		return this.#durationToken(dialog, "--sheet-morph-duration", 600);
+	}
+	/**
+	* Drops the trigger's return attribute and everything holding it up. The one
+	* teardown site — reached by animationend, the safety timeout, a second
+	* return, and disconnectedCallback.
+	*/
+	#clearTriggerReturn() {
+		const _ = this;
+		const state = _.#triggerReturn;
+		if (!state) return;
+		_.#triggerReturn = null;
+		clearTimeout(state.timer);
+		state.trigger.removeEventListener("animationend", state.onEnd);
+		state.trigger.removeAttribute("sheet-return");
 	}
 };
 var SheetHeader = class extends HTMLElement {};

@@ -15,6 +15,7 @@ class MorphEngine {
 	#saved = new Map();
 	#p = 0;
 	#revealed = false;
+	#heldSource = null;
 
 	constructor(options = {}) {
 		this.zIndex = options.zIndex ?? 9999;
@@ -62,6 +63,7 @@ class MorphEngine {
 			this.#state = 'showing';
 			return Promise.resolve(true);
 		}
+		this.restoreSource();
 		this.#source = from;
 		this.#target = to;
 		this.#save(from);
@@ -111,20 +113,30 @@ class MorphEngine {
 		else this.#finishHidden();
 	}
 
-	stop() {
+	stop({ restoreSource = true } = {}) {
 		if (this.#state === 'idle') return;
 		this.stops += 1;
 		const progress = this.#p;
 		this.#removeBlob();
-		this.#restore(this.#source);
+		if (restoreSource) this.#restore(this.#source);
+		else this.#heldSource = this.#source;
 		this.#restore(this.#target);
 		this.#state = 'idle';
 		this.#p = 0;
 		this.emit('stop', { progress });
 	}
 
+	restoreSource() {
+		const source = this.#heldSource;
+		if (!source) return false;
+		this.#heldSource = null;
+		this.#restore(source);
+		return true;
+	}
+
 	destroy() {
 		this.stop();
+		this.restoreSource();
 		this.#events.clear();
 	}
 

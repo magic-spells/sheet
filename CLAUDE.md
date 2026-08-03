@@ -116,7 +116,42 @@ spring exit.
 
 The inner engine's `stop` event is deliberately swallowed. `#releaseBlob()` uses `blob.stop()` as a transport handoff for a swipe dismissal, not as a request to close the dialog; forwarding that event would make dialog-panel finalize and demote the dialog in the middle of the swipe release, just before SheetEngine starts the direct exit. Only `SheetEngine.stop()` forwards its own terminal `stop`, because that is the actual force-close path.
 
-Stopping the blob restores the inline snapshot it took before the flight, which also erases the live drag pose SheetEngine painted after the panel landed. `#releaseBlob()` must therefore call `#applyFrame(#p)` in the **same task** as `blob.stop()`. Waiting for the first spring frame leaves one paint opportunity in which the blob is gone, the trigger is visible again, and the dialog has snapped back to rest before continuing its exit from the finger's release point.
+Stopping the blob restores the inline snapshot it took before the flight, which also erases the live drag pose SheetEngine painted after the panel landed. `#releaseBlob()` must therefore call `#applyFrame(#p)` in the **same task** as `blob.stop()`. Waiting for the first spring frame leaves one paint opportunity in which the blob is gone and the dialog has snapped back to rest before continuing its exit from the finger's release point. (The trigger no longer reappears in that window — the stop is a handoff now, see below — but the dialog half of the argument is unchanged.)
+
+#### A trigger that is never morphed back has to be handed back
+
+A direct exit — a swipe dismissal, or a close after the trigger detached or scrolled away —
+never runs MorphEngine's reverse flight, so its source crossfade never runs either. `stop()`
+restoring the source therefore put the button back at **full opacity on frame 0 of the
+exit**, where it sat under a still-lit scrim for the whole dismissal. That read as the button
+popping into existence at the *end*, which is why the defect looked like a late appearance
+rather than an early one.
+
+`#releaseBlob()` calls `blob.stop({ restoreSource: false })` — MorphEngine 0.1.2's transport
+handoff — so the trigger stays hidden and keeps its `morphing` mark for the length of the
+exit, and `#returnTrigger()` hands it over at the hidden settle. **The emit precedes the
+restore**, so a listener decorates a button that cannot yet paint and no frame exists showing
+it visible and undecorated. The other order works only while the component's `triggerreturn`
+listener happens to be registered ahead of anything else that paints — a timing invariant
+nothing enforces. Stating the order inside one method makes it structural.
+
+The alternative — let `stop()` reveal the button and re-hide it from the component — was
+rejected for the same reason. It is correct only because the re-hide lands in the same
+synchronous task, which is exactly the class of invariant the `#applyFrame(#p)` rule above
+already exists to protect. One such invariant in this file is enough.
+
+`stop()` and `destroy()` hand the trigger back with `announce = false`: a force close paints
+no frame, so there is no exit to wait out and no entrance to introduce. Every terminal route
+releases the hold, because the hold is the only thing that can strand a consumer's button
+invisible.
+
+The pop itself is CSS and stays out of MorphEngine. Its `sourceRevealUntil` crossfade looks
+like a fit but is derived from the blob's live rect against the source's natural rect, and by
+this point the blob is gone. What is left needs a duration, an easing, a keyframe and a
+reduced-motion policy — `--sheet-trigger-return-duration` and `--sheet-trigger-return-easing`
+driving a `sheet-return` attribute, read off the **trigger** because that is the element the
+`[sheet-return]` rule applies to and where an override will have been written. Zero writes no
+attribute and schedules nothing, which makes reduced motion and the opt-out one code path.
 
 **Known gap, deliberately not fixed for 0.1.0:** that turn-around is always bound to the trigger the
 run was armed with. `armMorph` refuses outside `hidden` and leaves `#morphTrigger` in place, so

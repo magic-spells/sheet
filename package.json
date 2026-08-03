@@ -51,7 +51,7 @@
 	},
 	"dependencies": {
 		"@magic-spells/frame-engine": "^1.0.1",
-		"@magic-spells/morph-engine": "^0.1.1",
+		"@magic-spells/morph-engine": "^0.1.2",
 		"@magic-spells/physics-engine": "^1.0.0"
 	},
 	"peerDependencies": {

@@ -46,6 +46,16 @@
 	   the real sheet is 1001, and the travelling blob alone sits above both.
 	   Extreme z-indices recreate the compositor re-sort flicker this stack avoids. */
 	--sheet-blob-z-index: 1002;
+
+	/* The trigger's way back in when a run does NOT morph back into it — a swipe
+	   dismissal, or a close after the trigger detached or scrolled away.
+	   MorphEngine's own source crossfade is derived from a blob that is already
+	   gone by then, so this is a plain CSS entrance in the sheet's vocabulary.
+	   Zeroing the duration is the opt-out and the reduced-motion policy at once:
+	   the component reads the token back and, at zero, writes no attribute and
+	   schedules no wait. */
+	--sheet-trigger-return-duration: 280ms;
+	--sheet-trigger-return-easing: cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
 /* The engine writes motion inline. These rules only establish resting geometry. */
@@ -588,13 +598,42 @@ sheet-panel[data-position='right']:has(sheet-footer) sheet-content {
 	);
 }
 
-/* The morph is the only motion here a media query can reach, because it is the
-   only one expressed as a CSS transition rather than as spring-driven inline
-   frames. Zeroing the duration is enough on its own: the component reads this
-   same token back and skips the transition entirely when it resolves to 0, so
-   the profile change lands as an instant swap with no dangling wait. */
+/* Unscoped on purpose. The trigger lives outside the sheet's subtree — often
+   elsewhere in the document entirely — so there is no ancestor to scope to.
+   MorphEngine's own [morphing] hook has the same shape for the same reason.
+   `both` covers the fill in case the attribute ever lands a frame ahead of the
+   visibility restore. */
+[sheet-return] {
+	animation: sheet-trigger-return var(--sheet-trigger-return-duration)
+		var(--sheet-trigger-return-easing) both;
+}
+
+@keyframes sheet-trigger-return {
+	from {
+		opacity: 0;
+		transform: scale(0.86);
+	}
+
+	60% {
+		opacity: 1;
+		transform: scale(1.04);
+	}
+
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+/* The morph and the trigger return are the only motion here a media query can
+   reach, because they are the only ones expressed as CSS rather than as
+   spring-driven inline frames. Zeroing the durations is enough on its own: the
+   component reads these same tokens back and skips the transition — and the
+   return attribute — entirely when they resolve to 0, so both land as instant
+   swaps with no dangling wait. */
 @media (prefers-reduced-motion: reduce) {
 	:root {
 		--sheet-morph-duration: 0ms;
+		--sheet-trigger-return-duration: 0ms;
 	}
 }

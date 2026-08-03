@@ -187,6 +187,7 @@ class SheetPanel extends HTMLElement {
 	#pendingProfile = null;
 	#contentObserver = null;
 	#contentRemeasureTimer = null;
+	#triggerReturn = null;
 	#handlers;
 
 	static get observedAttributes() {
@@ -302,6 +303,36 @@ class SheetPanel extends HTMLElement {
 				// install and a content-sized panel only ever picked up an observer if
 				// a window resize happened to rebuild the profile while it sat open.
 				_.#syncContentObserver();
+			},
+			// A direct exit never morphs back into the trigger, so the engine holds
+			// it hidden for the length of that exit and announces here — before it
+			// restores, so the button is decorated while it still cannot paint.
+			triggerReturn: ({ trigger }) => {
+				if (!trigger?.isConnected) return;
+				// Read off the TRIGGER, not the dialog: it is the element the
+				// [sheet-return] rule applies to and therefore where a consumer
+				// overriding the token will have put it — a trigger outside the
+				// dialog subtree would not inherit a dialog-scoped value at all.
+				const duration = _.#durationToken(trigger, '--sheet-trigger-return-duration', 280);
+				// Zero creates no animation rather than a zero-length one, matching
+				// how a zeroed profile morph swaps instantly instead of awaiting a
+				// transition that will never run. Reduced motion and the opt-out are
+				// the same code path.
+				if (duration <= 0) return;
+				_.#clearTriggerReturn();
+				const finish = () => _.#clearTriggerReturn();
+				_.#triggerReturn = {
+					trigger,
+					onEnd: (event) => {
+						if (event.target === trigger) finish();
+					},
+					// animationend never fires for an element removed or hidden
+					// mid-run, and this attribute sits on markup the component does
+					// not own — so it can never be the only way off.
+					timer: setTimeout(finish, duration + MORPH_TIMEOUT_PADDING_MS),
+				};
+				trigger.addEventListener('animationend', _.#triggerReturn.onEnd);
+				trigger.setAttribute('sheet-return', '');
 			},
 			hidden: (event) => {
 				if (event.target !== _.#panelRef) return;
@@ -517,6 +548,7 @@ class SheetPanel extends HTMLElement {
 		_.#engine.on('snapchange', _.#handlers.snapchange);
 		_.#engine.on('change', _.#handlers.change);
 		_.#engine.on('reveal', _.#handlers.reveal);
+		_.#engine.on('triggerreturn', _.#handlers.triggerReturn);
 		_.#syncSpring();
 		_.setAttribute('engine', '');
 
@@ -576,8 +608,10 @@ class SheetPanel extends HTMLElement {
 		document.removeEventListener('cancel', _.#handlers.escapeGuard, true);
 		_.#handlers.resize.cancel();
 		// Every component-owned timer and listener goes during teardown, the
-		// morph's transitionend and timeout included.
+		// morph's transitionend and timeout included — and the trigger's return
+		// attribute, which sits on markup this component does not own.
 		_.#clearMorphTimers();
+		_.#clearTriggerReturn();
 		_.#contentObserver?.disconnect();
 		_.#contentObserver = null;
 		clearTimeout(_.#contentRemeasureTimer);
@@ -614,6 +648,7 @@ class SheetPanel extends HTMLElement {
 		_.#engine?.off('change', _.#handlers.change);
 		_.#engine?.off('snapchange', _.#handlers.snapchange);
 		_.#engine?.off('reveal', _.#handlers.reveal);
+		_.#engine?.off('triggerreturn', _.#handlers.triggerReturn);
 		// Destroy before unwiring the transport: destroy() emits 'stop', and
 		// dialog-panel has to still be listening — that event is what closes an
 		// open dialog, emits its `hidden`, and returns focus. Unwiring first
@@ -643,6 +678,14 @@ class SheetPanel extends HTMLElement {
 	show(triggerEl) {
 		const _ = this;
 		if (window.innerWidth > _.maxDisplayWidth) return false;
+		// This trigger is being used to reopen the sheet, so its return pop is moot
+		// — and left running it is actively harmful, because #usableTriggerBox reads
+		// COMPUTED opacity and during the pop that is the animation's own `from: 0`.
+		// The arm gate would read the component's own entrance as a trigger the page
+		// had hidden and silently drop the morph. Same reasoning as the state gate
+		// in #usableTriggerBox: a hidden style that is the component's own doing
+		// says nothing about the page's intent.
+		if (_.#triggerReturn?.trigger === triggerEl) _.#clearTriggerReturn();
 		_.#prepareOpen();
 		const dialog = _.#dialogRef;
 		// This is the one classification point for a trigger morph. The transport
@@ -1947,24 +1990,53 @@ class SheetPanel extends HTMLElement {
 	}
 
 	/**
-	 * Resolves the morph duration in milliseconds from the CSS token.
+	 * Resolves a CSS duration token to milliseconds.
 	 *
-	 * The reduced-motion CSS declaration can lose the cascade to a later or
-	 * more specific consumer token. Reading the preference here too prevents
-	 * that override from restoring both the profile FLIP and trigger blob.
+	 * The reduced-motion CSS declaration can lose the cascade to a later or more
+	 * specific consumer token. Reading the preference here too prevents that
+	 * override from restoring motion the user asked not to see — which is why
+	 * every duration token in this component routes through one parser rather
+	 * than a second copy of this parse.
+	 * @param {HTMLElement} element - Element carrying the token.
+	 * @param {string} name - Custom property name.
+	 * @param {number} fallback - Milliseconds used when the token will not parse.
+	 * @returns {number} Duration in milliseconds.
+	 */
+	#durationToken(element, name, fallback) {
+		if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return 0;
+		const raw = getComputedStyle(element).getPropertyValue(name).trim();
+		const zero = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i);
+		if (zero && Number(zero[1]) === 0) return 0;
+		const match = raw.match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
+		if (!match) return fallback;
+		const value = Number(match[1]);
+		if (!Number.isFinite(value)) return fallback;
+		return match[2].toLowerCase() === 'ms' ? value : value * 1000;
+	}
+
+	/**
+	 * Resolves the morph duration in milliseconds from the CSS token. Governs both
+	 * the profile FLIP and the trigger blob's arm gate.
 	 * @param {HTMLElement} dialog - Dialog carrying the token.
 	 * @returns {number} Duration in milliseconds.
 	 */
 	#morphDuration(dialog) {
-		if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return 0;
-		const raw = getComputedStyle(dialog).getPropertyValue('--sheet-morph-duration').trim();
-		const zero = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i);
-		if (zero && Number(zero[1]) === 0) return 0;
-		const match = raw.match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
-		if (!match) return 600;
-		const value = Number(match[1]);
-		if (!Number.isFinite(value)) return 600;
-		return match[2].toLowerCase() === 'ms' ? value : value * 1000;
+		return this.#durationToken(dialog, '--sheet-morph-duration', 600);
+	}
+
+	/**
+	 * Drops the trigger's return attribute and everything holding it up. The one
+	 * teardown site — reached by animationend, the safety timeout, a second
+	 * return, and disconnectedCallback.
+	 */
+	#clearTriggerReturn() {
+		const _ = this;
+		const state = _.#triggerReturn;
+		if (!state) return;
+		_.#triggerReturn = null;
+		clearTimeout(state.timer);
+		state.trigger.removeEventListener('animationend', state.onEnd);
+		state.trigger.removeAttribute('sheet-return');
 	}
 }
 

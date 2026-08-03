@@ -24,6 +24,8 @@
   --sheet-morph-duration: .6s;
   --sheet-morph-easing: cubic-bezier(.34, 1.32, .52, 1);
   --sheet-blob-z-index: 1002;
+  --sheet-trigger-return-duration: .28s;
+  --sheet-trigger-return-easing: cubic-bezier(.34, 1.4, .64, 1);
 }
 
 dialog-panel[morph][state]:has(sheet-panel) > dialog {
@@ -340,9 +342,32 @@ sheet-panel[data-position="right"] sheet-footer {
 			max(0px, env(safe-area-inset-right, 0px) - var(--_sheet-safe-float, 0px)));
 }
 
+[sheet-return] {
+  animation: sheet-trigger-return var(--sheet-trigger-return-duration)
+		var(--sheet-trigger-return-easing) both;
+}
+
+@keyframes sheet-trigger-return {
+  from {
+    opacity: 0;
+    transform: scale(.86);
+  }
+
+  60% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --sheet-morph-duration: 0s;
+    --sheet-trigger-return-duration: 0s;
   }
 }
 /*$vite$:1*/

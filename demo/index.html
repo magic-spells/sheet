@@ -2778,13 +2778,13 @@ sheet.hide();</pre>
 				</p>
 				<p class="ref-note">
 					Never make a drag the only route to an action. Interactive descendants stay clickable
-					because pointer capture is deferred until movement passes <code>5px</code>. The scrim
-					is not a drag surface at all — <code>showModal()</code> makes the native
+					because pointer capture is deferred until movement passes <code>5px</code>. The scrim is
+					not a drag surface at all — <code>showModal()</code> makes the native
 					<code>::backdrop</code> win every hit test out there, so
 					<code>&lt;dialog-backdrop&gt;</code> only paints. A click on it dismisses when the
-					<code>pointerdown</code> landed on the dialog itself and the click falls outside
-					the dialog's rect: no distance or duration gate, which is what keeps a near-miss
-					swipe at the sheet's edge from being refused.
+					<code>pointerdown</code> landed on the dialog itself and the click falls outside the
+					dialog's rect: no distance or duration gate, which is what keeps a near-miss swipe at the
+					sheet's edge from being refused.
 				</p>
 
 				<h3 class="ref-heading">Browser support</h3>

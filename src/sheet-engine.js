@@ -1071,6 +1071,7 @@ class SheetEngine extends EventEmitter {
 	#morphTrigger = null;
 	#blobTo = null;
 	#gestureExit = false;
+	#heldTrigger = null;
 	#triggerProbe;
 
 	/**
@@ -1730,6 +1731,9 @@ class SheetEngine extends EventEmitter {
 	stop() {
 		const _ = this;
 		if (_.#blobEngine && _.#blobEngine.state !== 'idle') _.#blobEngine.stop();
+		// A force close paints no frame, so there is no exit for the button to wait
+		// out and no entrance to introduce — hand it straight back.
+		_.#returnTrigger(false);
 		_.#blobTo = null;
 		_.#morphTrigger = null;
 		_.#gestureExit = false;
@@ -1903,6 +1907,11 @@ class SheetEngine extends EventEmitter {
 		_.#state = 'hidden';
 		_.#phase = 'hidden';
 		_.#p = 0;
+		// Ahead of the hidden emit for the same reason #restoreInline is:
+		// dialog-panel finalizes synchronously from it and a listener there may
+		// re-enter show(), which would arm a fresh flight over a trigger this run
+		// is still holding.
+		_.#returnTrigger(true);
 		// Restore BEFORE emitting, matching stop(): the hidden emit runs
 		// dialog-panel's finalize synchronously, and a listener there may call
 		// show() again — restoring afterwards would wipe that new run's freshly
@@ -2259,13 +2268,40 @@ class SheetEngine extends EventEmitter {
 
 	#releaseBlob() {
 		const _ = this;
-		if (_.#blobEngine && _.#blobEngine.state !== 'idle') _.#blobEngine.stop();
+		// #morphTrigger is about to be cleared, but the button it names is still
+		// hidden by MorphEngine and has to be handed back when the exit lands.
+		if (_.#morphTrigger) _.#heldTrigger = _.#morphTrigger;
+		if (_.#blobEngine && _.#blobEngine.state !== 'idle') {
+			// A transport handoff, not an abort. A plain stop() restores the source,
+			// which puts the trigger back at full opacity on frame 0 of an exit that
+			// has not started, under a scrim that is still up — the whole defect.
+			_.#blobEngine.stop({ restoreSource: false });
+		}
 		_.#blobTo = null;
 		_.#morphTrigger = null;
 		// MorphEngine.stop() restores the dialog snapshot, which erases the live
 		// drag pose. Repaint in this same task so a swipe release never flashes at
 		// rest between the disappearing blob and the first exit spring frame.
 		_.#applyFrame(_.#p);
+	}
+
+	/**
+	 * Hands a held trigger back to the page at the end of a direct exit.
+	 *
+	 * The emit precedes the restore deliberately: a listener decorates the button
+	 * while it still cannot paint, so no frame exists in which it is visible and
+	 * undecorated. Stating that order here makes it structural, rather than a
+	 * consequence of which listener happened to be registered first.
+	 * @param {boolean} announce - Emit `triggerreturn` first. False on a force
+	 *   close, which paints no frame and so has no entrance to introduce.
+	 */
+	#returnTrigger(announce) {
+		const _ = this;
+		const trigger = _.#heldTrigger;
+		if (!trigger) return;
+		_.#heldTrigger = null;
+		if (announce) _.emit('triggerreturn', { trigger });
+		_.#blobEngine?.restoreSource();
 	}
 
 	#finishBlobShown() {

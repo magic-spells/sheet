@@ -180,6 +180,36 @@ arrives and leaves on the ordinary spring, exactly as it would without the attri
 same zeroed token collapses a *profile* morph to an instant swap, because that one has no
 spring to fall back to.
 
+### Coming back when it does not morph back
+
+Closing by button, Escape, or backdrop morphs the panel back into the trigger. **Swiping it
+away does not** — the panel leaves on its own spring, so there is no reverse flight to
+crossfade the button back in. Rather than snapping it back to full opacity the moment the
+dismissal starts, under a scrim that is still up, the sheet holds the trigger hidden for the
+length of that exit and pops it in once the panel and scrim are gone. A close after the
+trigger detached or scrolled out of view takes the same route, for the same reason.
+
+Tune it with `--sheet-trigger-return-duration` and `--sheet-trigger-return-easing`. Setting
+the duration to `0` restores the button instantly with no animation at all;
+`prefers-reduced-motion` already does. Override the movement itself by redefining the
+keyframes:
+
+```css
+@keyframes sheet-trigger-return {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+```
+
+While it runs, the trigger carries a `sheet-return` attribute — useful if you would rather
+drive the return from your own CSS entirely.
+
 ## Sizing
 
 **`snap-points` is a mobile-profile attribute.** Below `breakpoint`, a bottom sheet can declare
@@ -450,6 +480,8 @@ Set tokens on `:root`, a panel, or another ancestor.
 | `--sheet-exit-cushion` | `28px` | How far past its edge a dismissal carries the panel, on top of its size and inset. Raise it to about your shadow's blur if the panel leaves a halo on the way out |
 | `--sheet-morph-duration` | `600ms` | Two roles: the profile-morph duration, and the trigger-morph gate. `0` — which `prefers-reduced-motion` sets — swaps a profile morph instantly and disables the trigger morph entirely, leaving the ordinary spring entrance and exit |
 | `--sheet-morph-easing` | `cubic-bezier(0.34, 1.32, 0.52, 1)` | Profile-morph easing; overshoots slightly by default |
+| `--sheet-trigger-return-duration` | `280ms` | How long the trigger takes to pop back in after a close that never morphed back into it — a swipe dismissal, or a close after the trigger vanished. `0` — which `prefers-reduced-motion` sets — restores the button instantly with no animation |
+| `--sheet-trigger-return-easing` | `cubic-bezier(0.34, 1.4, 0.64, 1)` | Easing for that pop; overshoots past full size on purpose |
 | `--sheet-backdrop-progress` | written per frame | Read-only. Drives the overlay from the dismissal zone; always `0`–`1` |
 | `--sheet-progress` | written per frame | Read-only. Exactly what was painted — a bottom sheet publishes its snap breath up to about `1.024`, no other profile exceeds `1` |
 
