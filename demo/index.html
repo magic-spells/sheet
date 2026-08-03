@@ -625,92 +625,109 @@
 				white-space: pre-line;
 			}
 
-			/* ---- Profile cards ----
-			   A button in the breakpoint section opens one of two different sheets
-			   depending on the viewport, which a label alone cannot say. Each is
-			   boxed with both profiles spelled out, and the row matching the current
-			   viewport is lit — at 768px, the same breakpoint those sheets use. */
-			.profile-grid {
-				display: grid;
-				grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-				gap: 1rem;
+			/* ---- Profile rows ----
+			   A row in the breakpoint section opens one of two different sheets
+			   depending on the viewport, which a label alone cannot say. Each
+			   row is itself the open button — full width, stacked, mobile-list
+			   style — carrying the "mobile form → desktop form" summary alone. */
+			.profile-list {
+				display: flex;
+				flex-direction: column;
+				gap: 0.65rem;
+				max-width: 560px;
 				margin-bottom: 1.5rem;
 			}
 
-			.profile-card {
+			.profile-row {
 				display: flex;
-				flex-direction: column;
-				gap: 0.85rem;
-				min-width: 0;
-				padding: 1.15rem;
+				align-items: center;
+				gap: 1rem;
+				width: 100%;
+				padding: 1.05rem 1.25rem;
+				color: var(--cream);
+				text-align: left;
 				background: rgba(255, 255, 255, 0.035);
 				border: 1px solid var(--border-accent);
 				border-radius: 10px;
+				font: inherit;
+				cursor: pointer;
+				transition:
+					color 0.25s ease,
+					border-color 0.25s ease,
+					background 0.25s ease;
 			}
 
-			.profile-title {
-				color: var(--cream);
-				font-size: 1.02rem;
-				font-weight: 400;
-				line-height: 1.3;
+			.profile-row:hover {
+				background: rgba(255, 255, 255, 0.06);
+				border-color: var(--iris-dim);
 			}
 
-			.profile-side {
+			/* Mobile and desktop sit as matching columns, label over value,
+			   so the two forms read as a direct comparison. The columns are an
+			   explicit `1fr auto 1fr` grid rather than flex, so the arrow and the
+			   desktop column land on the same x in every row however long the
+			   mobile value is — the rows are equal width, so equal fractions align. */
+			.profile-row-compare {
 				display: grid;
-				gap: 0.2rem;
-				padding-left: 0.7rem;
-				border-left: 2px solid var(--profile-rule, var(--border-accent));
+				grid-template-columns: 1fr auto 1fr;
+				align-items: center;
+				flex: 1 1 auto;
+				min-width: 0;
+				gap: 1rem;
 			}
 
-			.profile-side-key {
-				color: var(--profile-key, var(--text-dim));
+			.profile-row-col {
+				display: grid;
+				min-width: 0;
+				gap: 0.2rem;
+			}
+
+			.profile-row-label {
+				color: var(--text-dim);
 				font-family: var(--font-mono);
-				font-size: 0.72rem;
-				letter-spacing: 0.18em;
+				font-size: 0.74rem;
+				letter-spacing: 0.16em;
 				text-transform: uppercase;
 			}
 
-			/* The lit row says so in words as well as in colour */
-			.profile-side-key::after {
-				content: var(--profile-now, '');
+			.profile-row-value {
+				overflow: hidden;
+				color: var(--cream);
+				font-size: 1.05rem;
+				white-space: nowrap;
+				text-overflow: ellipsis;
 			}
 
-			.profile-side-val {
-				color: var(--profile-val, var(--cream-dim));
-				font-size: 0.92rem;
-				line-height: 1.55;
+			.profile-row-arrow {
+				flex: none;
+				color: var(--text-dim);
+				font-size: 1.1rem;
 			}
 
-			.profile-side-val code {
-				color: inherit;
+			.profile-row-action {
+				flex: none;
+				color: var(--text-dim);
 				font-family: var(--font-mono);
-				font-size: 0.86em;
+				font-size: 0.76rem;
+				letter-spacing: 0.06em;
+				text-transform: uppercase;
 			}
 
-			/* margin-top:auto lines the buttons up across cards of unequal height */
-			.profile-card .btn {
-				align-self: start;
-				margin-top: auto;
-				padding-inline: 1.2em;
-				font-size: 0.85rem;
-			}
-
-			/* One switch per viewport; the four properties above read it back. */
-			@media (max-width: 767px) {
-				.profile-side[data-side='mobile'] {
-					--profile-rule: var(--iris);
-					--profile-key: var(--iris-text);
-					--profile-val: var(--cream);
-					--profile-now: ' · now';
+			@media (max-width: 480px) {
+				.profile-row {
+					padding: 0.95rem 1rem;
 				}
-			}
 
-			@media (min-width: 768px) {
-				.profile-side[data-side='desktop'] {
-					--profile-rule: var(--iris);
-					--profile-key: var(--iris-text);
-					--profile-val: var(--cream);
-					--profile-now: ' · now';
+				.profile-row-compare {
+					gap: 0.7rem;
+				}
+
+				.profile-row-value {
+					font-size: 0.98rem;
+				}
+
+				.profile-row-action {
+					display: none;
 				}
 			}
 
@@ -1538,112 +1555,57 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>A bottom sheet on a phone. Something else entirely on a desktop.</h2>
 				<p class="demo-desc">
-					Below <code>breakpoint</code> — 768px by default — the mobile <code>position</code>,
-					<code>mode</code> and <code>effect</code> apply. At or above it, their
-					<code>desktop-*</code> twins take over. Resize across 768px while a sheet is open and it
-					morphs to the new geometry in place: no close and reopen, no lost focus, no lifecycle
-					events. Unset values inherit down the column, with two exceptions. A
-					<code>bottom</code> sheet becomes a centred dialog on the desktop, because a floating card
-					in the middle of the screen is what a desktop dialog reads as — say
-					<code>desktop-position="bottom"</code> to keep it on the edge, where it sizes to its
-					content too. And <code>desktop-mode</code> never reads <code>mode</code> at all: absent, a
-					desktop panel is always a <code>card</code>, whatever the mobile profile does.
-					<code>snap-points</code> stops applying entirely past the breakpoint: every desktop
-					profile is dismiss-only, with one resting size taken from its content (bottom and centre)
-					or from a CSS token (the sides).
+					Below <code>breakpoint</code> (768px), mobile <code>position</code>, <code>mode</code>,
+					and <code>effect</code> apply — at or above it, their <code>desktop-*</code> twins take
+					over. Resize while a sheet is open and it morphs in place, with no reopen and no lost
+					focus.
 				</p>
-				<div class="ref-table">
-					<div class="ref-row ref-head">
-						<div>Question</div>
-						<div>Mobile</div>
-						<div>Desktop</div>
-					</div>
-					<div class="ref-row">
-						<div>Which edge?</div>
-						<div><code>position</code></div>
-						<div>
-							<code>desktop-position</code> → <code>center</code> for a
-							<code>bottom</code> position, else <code>position</code>
-						</div>
-					</div>
-					<div class="ref-row">
-						<div>Flush or floating?</div>
-						<div><code>mode</code></div>
-						<div><code>desktop-mode</code> → <code>card</code>, never <code>mode</code></div>
-					</div>
-					<div class="ref-row">
-						<div>How does it arrive?</div>
-						<div><code>effect</code></div>
-						<div><code>desktop-effect</code> → <code>effect</code></div>
-					</div>
-					<div class="ref-row">
-						<div>How does it leave?</div>
-						<div><code>exit-effect</code> → <code>effect</code></div>
-						<div>
-							<code>desktop-exit-effect</code> → <code>exit-effect</code> →
-							<code>desktop-effect</code>
-						</div>
-					</div>
-				</div>
 				<div class="stage">
-					<div class="profile-grid">
-						<div class="profile-card">
-							<h3 class="profile-title">Quick shop</h3>
-							<div class="profile-side" data-side="mobile">
-								<span class="profile-side-key">Mobile</span>
-								<span class="profile-side-val"
-									>Bottom sheet, peeking at <code>48vh</code> and pulling up to <code>92vh</code>.
-									Slides back down to leave.</span
-								>
-							</div>
-							<div class="profile-side" data-side="desktop">
-								<span class="profile-side-key">Desktop</span>
-								<span class="profile-side-val"
-									>Right-hand drawer, floating clear as a card. Shrinks away to leave.</span
-								>
-							</div>
-							<button class="btn" data-open="quickshop-panel">Open</button>
-						</div>
+					<div class="profile-list">
+						<button class="profile-row" data-open="quickshop-panel" aria-label="Quick shop">
+							<span class="profile-row-compare">
+								<span class="profile-row-col">
+									<span class="profile-row-label">Mobile</span>
+									<span class="profile-row-value">Bottom sheet</span>
+								</span>
+								<span class="profile-row-arrow" aria-hidden="true">→</span>
+								<span class="profile-row-col">
+									<span class="profile-row-label">Desktop</span>
+									<span class="profile-row-value">Right drawer</span>
+								</span>
+							</span>
+							<span class="profile-row-action" aria-hidden="true">Open ›</span>
+						</button>
 
-						<div class="profile-card">
-							<h3 class="profile-title">Discard draft</h3>
-							<div class="profile-side" data-side="mobile">
-								<span class="profile-side-key">Mobile</span>
-								<span class="profile-side-val"
-									>Action sheet at <code>34vh</code>, floating clear of the bottom edge as an inset
-									card.</span
-								>
-							</div>
-							<div class="profile-side" data-side="desktop">
-								<span class="profile-side-key">Desktop</span>
-								<span class="profile-side-val"
-									>Centred modal sized by its own content, fading up in place.</span
-								>
-							</div>
-							<p class="profile-side-val">
-								With <code>morph-trigger</code>, the opener becomes a spring-driven blob and stays
-								hidden while the sheet is open. Deliberate closes morph back; a swipe restores the
-								opener and takes the configured sheet exit.
-							</p>
-							<button class="btn" data-open="confirm-panel">Open</button>
-						</div>
+						<button class="profile-row" data-open="confirm-panel" aria-label="Discard draft">
+							<span class="profile-row-compare">
+								<span class="profile-row-col">
+									<span class="profile-row-label">Mobile</span>
+									<span class="profile-row-value">Action sheet</span>
+								</span>
+								<span class="profile-row-arrow" aria-hidden="true">→</span>
+								<span class="profile-row-col">
+									<span class="profile-row-label">Desktop</span>
+									<span class="profile-row-value">Centred modal</span>
+								</span>
+							</span>
+							<span class="profile-row-action" aria-hidden="true">Open ›</span>
+						</button>
 
-						<div class="profile-card">
-							<h3 class="profile-title">Filters</h3>
-							<div class="profile-side" data-side="mobile">
-								<span class="profile-side-key">Mobile</span>
-								<span class="profile-side-val"
-									>Bottom sheet between <code>40vh</code> and <code>88vh</code>.</span
-								>
-							</div>
-							<div class="profile-side" data-side="desktop">
-								<span class="profile-side-key">Desktop</span>
-								<span class="profile-side-val"
-									>Left-hand drawer, a card by default, sliding in from its edge.</span
-								>
-							</div>
-							<button class="btn" data-open="filters-panel">Open</button>
-						</div>
+						<button class="profile-row" data-open="filters-panel" aria-label="Filters">
+							<span class="profile-row-compare">
+								<span class="profile-row-col">
+									<span class="profile-row-label">Mobile</span>
+									<span class="profile-row-value">Bottom sheet</span>
+								</span>
+								<span class="profile-row-arrow" aria-hidden="true">→</span>
+								<span class="profile-row-col">
+									<span class="profile-row-label">Desktop</span>
+									<span class="profile-row-value">Left drawer</span>
+								</span>
+							</span>
+							<span class="profile-row-action" aria-hidden="true">Open ›</span>
+						</button>
 					</div>
 					<output class="readout" id="width-readout">Measuring the viewport…</output>
 				</div>
@@ -1687,7 +1649,7 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 					<span class="spec-key">Effects</span>
 					<span class="spec-rule" aria-hidden="true"></span>
 				</div>
-				<h2>Three ways to arrive.</h2>
+				<h2>Three ways to animate in.</h2>
 				<p class="demo-desc">
 					An effect is how the sheet arrives. <code>slide</code> travels in from its edge,
 					<code>slide-fade</code> fades across a short <code>24px</code> slide, and
@@ -1785,7 +1747,7 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 					<span class="spec-key">Lifecycle</span>
 					<span class="spec-rule" aria-hidden="true"></span>
 				</div>
-				<h2>Every open, close and landing leaves a mark.</h2>
+				<h2>Bind to events using the API.</h2>
 				<p class="demo-desc">
 					Four lifecycle events come from the parent <code>&lt;dialog-panel&gt;</code>;
 					<code>snapchange</code> and <code>snaprelease</code> come from the sheet. All six bubble,
@@ -1827,22 +1789,7 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 					<span class="spec-key">Lab</span>
 					<span class="spec-rule" aria-hidden="true"></span>
 				</div>
-				<h2>Set the dials, and read back the markup.</h2>
-				<p class="demo-desc">
-					Four positions, two geometries and four effects make thirty-two profiles of one panel —
-					and the mobile and desktop halves are dialled separately, split at the real 768px
-					breakpoint. Every setting is a plain attribute or CSS token, no config object. Leave a
-					desktop dial on <em>inherit</em> and it falls back the documented way: position takes the
-					mobile one — except a <code>bottom</code>, which becomes a centred dialog — and the
-					effects follow their chains. Mode is the one that inherits nothing, which is why its
-					switch reads <em>card (default)</em> instead: on a wide viewport the sheet floats as a
-					card whatever <code>mode</code> says. The snap switches are a mobile dial: past the
-					breakpoint the panel drops to one resting size, and a desktop <code>bottom</code> takes
-					that size from its own content, just like a centre. Set the dials, then open: the snippet
-					below is re-read from the element itself, so it always shows the real DOM. Resize across
-					the breakpoint with the panel open and it morphs between your two configurations in place.
-					The spring dials govern entrances only; exits and snaps keep their presets.
-				</p>
+				<h2>Try it out for yourself.</h2>
 
 				<div class="lab-grid">
 					<!-- Each attribute is one boxed group, mobile on the left and
