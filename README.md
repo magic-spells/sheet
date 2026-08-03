@@ -1,6 +1,6 @@
 # @magic-spells/sheet
 
-**~13 KB** gzipped · ~20 KB with the engines bundled
+**~22 kB** gzipped — `dist/sheet.min.js`, with dialog-panel and all three engines bundled in — plus **~1.7 kB** for `dist/sheet.min.css`. Deliberately approximate: the build measures both from the real artifacts into `demo/dist/sizes.json` and the demo renders that, so the exact figure is the one the demo shows rather than a number hand-maintained here.
 
 Gesture-driven edge sheets and floating cards built on a real native `<dialog>` through `@magic-spells/dialog-panel`. `@magic-spells/sheet` adds spring motion, bottom-sheet snap points, drag/flick policy, and responsive presentation profiles.
 
@@ -12,7 +12,7 @@ Gesture-driven edge sheets and floating cards built on a real native `<dialog>` 
 - Inset card mode with independently configurable desktop presentation
 - Mobile-bottom-only CSS snap points, live dragging, nearest-snap release, and velocity flicks
 - Spring motion powered by `@magic-spells/physics-engine` and `@magic-spells/frame-engine`
-- Header, footer, backdrop, and scroll-aware content drag surfaces
+- Header, footer, handle strip, and scroll-aware content drag surfaces
 - Native dialog focus trapping, focus return, Escape handling, and modal semantics
 - Safe-area-aware optional footer
 - Optional trigger morph via `@magic-spells/morph-engine`: `morph-trigger` grows the panel out of the element passed to `show()` and reverses back into it on a deliberate close
@@ -61,12 +61,36 @@ needs nothing else.
 The one case where the bare specifiers become your concern is loading `dist/sheet.esm.js` straight
 into a browser with no bundler, since nothing is there to resolve them. Supply an import map
 covering dialog-panel and the engines — the [demo](./demo/index.html) does exactly that — or use
-`dist/sheet.min.js`, which already has all of them bundled.
+`dist/sheet.min.js`, which already has dialog-panel and all three engines bundled into it.
 
 The package ships two entry points and no CommonJS build: `dist/sheet.esm.js` for anything with a
-module graph, and `dist/sheet.min.js` — a self-contained UMD — for a plain `<script>` tag. No
-`require` condition is declared. Node 22 and newer can still `require()` the ESM build directly, and
-older Node throws `ERR_REQUIRE_ESM`; either way nothing here ships a second copy of the engines.
+module graph, and `dist/sheet.min.js` — a UMD carrying every JavaScript dependency — for a plain
+`<script>` tag. No `require` condition is declared. Node 22 and newer can still `require()` the ESM
+build directly, and older Node throws `ERR_REQUIRE_ESM`; either way nothing here ships a second copy
+of the engines.
+
+### Without a bundler
+
+`dist/sheet.min.js` bundles the JavaScript dependencies. It does **not** carry any CSS: the UMD build
+extracts its stylesheet to `dist/sheet.min.css` rather than injecting it, and dialog-panel ships its
+own separately. Link both, or you get a full-bleed unstyled native `<dialog>` — no geometry, no
+radius, no scrim — with nothing on the console to say why.
+
+```html
+<link rel="stylesheet" href="https://unpkg.com/@magic-spells/dialog-panel/dist/dialog-panel.min.css" />
+<link rel="stylesheet" href="https://unpkg.com/@magic-spells/sheet/dist/sheet.min.css" />
+
+<script defer src="https://unpkg.com/@magic-spells/sheet/dist/sheet.min.js"></script>
+```
+
+**`defer` is load-bearing, and leaving it off fails quietly.** A plain `<script src>` in the `<head>`
+runs while the parser is still inside your markup, so `<sheet-panel>` upgrades the instant its start
+tag is read — before any of its children exist. `connectedCallback` finds its drag surfaces with
+`querySelector`, so the header, content and footer all come back `null`, nothing binds, and the
+`touchmove` veto is never installed. The parent references survive because they are `closest()` walks
+up the tree, which means the sheet still opens, closes, and returns focus exactly as documented and
+**only the gestures are dead**. Nothing is logged. `defer` — or `type="module"`, or a `<script>` at
+the end of `<body>` — runs the definitions after parsing, and every surface binds.
 
 ## Usage
 
@@ -111,6 +135,16 @@ Keep the canonical nesting intact. `dialog-panel` owns the native dialog, while 
 ```
 
 Always open through `sheet.show(trigger)`. The trigger is passed straight through to dialog-panel and is used for returning focus when the sheet closes, so it is optional: the engine declares itself as the one animating the dialog, and that is what selects the engine transport, with or without a trigger. Pass a trigger whenever there is one; a sheet opened from a timer or a route change can call `sheet.show()` bare and focus simply returns wherever it was. Elements with `data-action-hide-dialog` continue to use dialog-panel's built-in delegation.
+
+**Opt the document into the safe area.** Edge sheets pad themselves past a notch and the home
+indicator with `env(safe-area-inset-*)` — the bottom, left and right panels each pad their own edge,
+and `<sheet-footer>` adds the same inset on top of its padding. On iOS every one of those resolves to
+`0px` unless the viewport meta asks for the full display, so without this tag the footer's buttons sit
+under the home indicator and a side sheet runs into the curve:
+
+```html
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+```
 
 ### Growing out of the trigger
 
@@ -175,13 +209,26 @@ only to open or dismissed.
 
 ## Gestures and Snap Rules
 
-The header, optional footer, and generated backdrop are unconditional drag surfaces, as is the panel's own handle strip — the padding a side sheet draws its pill into, which no child surface covers. The content hands a touch gesture to the sheet only once the scrollables under the pointer have no room left in that direction:
+The header and the optional footer are unconditional drag surfaces, as is the panel's own handle strip — the padding a side sheet draws its pill into, which no child surface covers. The content hands a touch gesture to the sheet only once the scrollables under the pointer have no room left in that direction:
 
 - A bottom sheet claims downward motion at the content's top and upward motion at its bottom.
 - Left and right sheets use the corresponding horizontal scroll edge.
 - Nested scrollers count too: a horizontal carousel inside the content scrolls on its own until it reaches its edge, then the gesture passes to the sheet.
 - Once claimed, a non-passive `touchmove` veto keeps native scrolling from fighting the sheet.
 - Motion past zero or beyond the largest bottom snap gets rubber-band resistance.
+
+**The scrim is not one of them.** `showModal()` makes everything outside the dialog's own subtree
+inert, and the native `::backdrop` wins every hit test in the dim region while reporting the *dialog*
+as its target — so `<dialog-backdrop>` is a paint surface (scrim fill, blur, opacity) and never an
+event target. Pressing the dim area and pulling moves nothing.
+
+Clicking it does dismiss, subject to `dismiss`, and the rule is geometric rather than timed: the
+`pointerdown` has to have landed on the dialog itself, and the click has to fall outside the dialog's
+rect. There is no distance or duration threshold in either direction. A long slow drag that begins on
+the scrim still closes the sheet; a selection that begins on panel content and releases out on the
+scrim does not, however far it travelled. A distance gate would refuse the near-miss swipe — aiming
+for the sheet's edge, landing just above it, and pulling — so where the gesture began answers both
+questions and how far it went answers neither.
 
 For a mobile bottom sheet on release:
 
@@ -190,7 +237,6 @@ For a mobile bottom sheet on release:
 - A dismiss-direction flick from the lowest snap closes the panel.
 - A slower release selects the nearest snap; the closed edge participates as a target below the lowest snap.
 - Cancelled gestures return to the active snap.
-- A backdrop gesture under `10px` and `300ms` is a tap and closes.
 
 Side sheets, centred dialogs, and a desktop bottom panel all use the same release shape as a
 snapless bottom sheet: dismiss or return to their one resting size, with no nearest-snap search.
@@ -199,9 +245,17 @@ snapless bottom sheet: dismiss or return to their one resting size, with no near
 
 | Effect | Behavior |
 | --- | --- |
-| `slide` | Travels clear off the configured edge and springs to rest |
-| `fade-scale` | Fades from `0` while scaling from `0.95`; the default for a desktop `center` profile |
-| `slide-fade` | Fades with a `24px` edge-directed slide |
+| `slide` | Travels clear off the configured edge and springs to rest. Carries no blur |
+| `fade-scale` | Fades from `0` while scaling from `0.95`, through an `8px` blur; the default for a desktop `center` profile |
+| `slide-fade` | Fades with a `24px` edge-directed slide, through a `4px` blur |
+
+Only the two fading effects blur, and the peak values differ because they have different amounts of
+other motion to hide behind: `fade-scale` changes almost nothing geometrically, so the blur carries
+the arrival, while `slide-fade` already translates and a matching blur would read as a smear. A
+`slide` arrives at full clarity from off screen and deliberately takes none. The blur resolves to `0`
+on the same frame opacity reaches full, which keeps it out of the spring's overshoot — a settled panel
+can never soften again — and an exit walks the same blur backward. **It is not tunable from CSS**:
+there is no `--sheet-*` token for it, unlike every other visual constant in the package.
 
 Every profile inherits `effect` unless told otherwise, with one exception: `desktop-effect` defaults
 to `fade-scale` when `desktop-position` is `center`, because a centered dialog rests against no edge
@@ -389,6 +443,8 @@ Set tokens on `:root`, a panel, or another ancestor.
 | `--sheet-footer-background` | `transparent` | Footer background |
 | `--sheet-overlay-background` | `rgba(0, 0, 0, 0.5)` | Custom backdrop fill |
 | `--sheet-overlay-blur` | `5px` | Custom backdrop blur |
+| `--sheet-panel-z-index` | `1001` | Stacking order of the dialog itself, for any normal-flow render. One above dialog-panel's scrim — see the scale below |
+| `--sheet-blob-z-index` | `1002` | Stacking order of the trigger-morph blob, which has to fly above both the scrim and the panel. Read back in JS with the same fallback, so overriding it in CSS moves the real blob |
 | `--sheet-desktop-panel-width` | `min(26rem, 90vw)` | Maximum desktop card width |
 | `--sheet-center-width` | `min(28rem, 100vw - 2 * card margin)` | Width of a `center` dialog; its height follows its content |
 | `--sheet-exit-cushion` | `28px` | How far past its edge a dismissal carries the panel, on top of its size and inset. Raise it to about your shadow's blur if the panel leaves a halo on the way out |
@@ -396,6 +452,12 @@ Set tokens on `:root`, a panel, or another ancestor.
 | `--sheet-morph-easing` | `cubic-bezier(0.34, 1.32, 0.52, 1)` | Profile-morph easing; overshoots slightly by default |
 | `--sheet-backdrop-progress` | written per frame | Read-only. Drives the overlay from the dismissal zone; always `0`–`1` |
 | `--sheet-progress` | written per frame | Read-only. Exactly what was painted — a bottom sheet publishes its snap breath up to about `1.024`, no other profile exceeds `1` |
+
+The three transport surfaces are stacked adjacently and deliberately low: dialog-panel's scrim at
+`--dialog-backdrop-z-index` (`1000`), the panel one above it at `1001`, and the travelling blob above
+both at `1002`. If a sticky site header or a third-party widget paints over the sheet, raise the trio
+together rather than one of them — and raise it by as little as clears the offender. Extreme values
+re-create the whole-page compositor re-sort flicker this scale exists to avoid.
 
 ```css
 :root {
@@ -448,7 +510,22 @@ come from `<dialog-panel>`. Since `<dialog-panel>` is the *ancestor*, a listener
 | `beforeHide` | `<dialog-panel>` | Yes | Before the exit spring starts |
 | `hidden` | `<dialog-panel>` | No | After exit and native dialog cleanup |
 | `snapchange` | `<sheet-panel>` | No | After a different snap settles; detail is `{ from, to }` |
-| `snaprelease` | `<sheet-panel>` | No | After any claimed pointer release resolves; detail is `{ velocity, flick, direction, size, target, prevented }`, with a zero-based target or `null` for dismissal. `target` is the snap actually taken, so a dismissal refused by `dismiss` reports the active snap with `prevented: true` |
+| `snaprelease` | `<sheet-panel>` | No | After any claimed pointer release resolves; detail is `{ velocity, flick, direction, size, target, prevented }` — specified below |
+
+The `snaprelease` detail, in full:
+
+| Field | Type | Value |
+| --- | --- | --- |
+| `velocity` | number | Release velocity in px/ms, projected onto the profile's dismiss axis and **signed away from rest** — positive is toward the closed edge, negative is back toward open. A left sheet is the one that inverts, since it dismisses toward smaller coordinates |
+| `flick` | boolean | `Math.abs(velocity) > 0.5`, the same threshold the release policy itself uses |
+| `direction` | `'away'`, `'toward'`, `'none'` | The sign of `velocity`, and **not** the `up`/`down`/`left`/`right` vocabulary you may expect — a bottom sheet swiped closed reports `'away'`, so `detail.direction === 'down'` silently never matches |
+| `size` | number | The panel's logical size in px along the dismiss axis at the moment of release |
+| `target` | number or `null` | Zero-based index of the snap actually taken, or `null` for a dismissal that is going through |
+| `prevented` | boolean | True when the release resolved to a dismissal that did not happen |
+
+`target` reports what was *taken*, never what was merely resolved. A dismissal refused by `dismiss`,
+and one a `beforeHide` listener vetoes, both report the active snap with `prevented: true` rather than
+`null` — so `target === null` is a reliable signal to tear down a draft or release a camera stream.
 
 ```js
 const sheet = document.querySelector('sheet-panel');

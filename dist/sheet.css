@@ -57,6 +57,13 @@ dialog-panel[morph][state]:has(sheet-panel[data-position="bottom"]:not([data-des
 
 dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-position="bottom"]) > dialog {
   height: fit-content;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-position="bottom"]:not([data-mode="card"])) > dialog {
+  max-height: 100dvh;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-mode="card"][data-position="bottom"]) > dialog {
   max-height: calc(100dvh - 2 * var(--sheet-card-margin));
 }
 
@@ -88,9 +95,15 @@ dialog-panel[morph][state]:has(sheet-panel[data-position="center"]) > dialog {
   inset: 0;
 }
 
-dialog-panel[morph][state]:has(sheet-footer) > dialog {
+dialog-panel[morph][state]:has(sheet-panel[data-position="bottom"] sheet-footer) > dialog {
   padding-bottom: 0;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position="left"] sheet-footer) > dialog {
   padding-left: 0;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position="right"] sheet-footer) > dialog {
   padding-right: 0;
 }
 
@@ -183,7 +196,7 @@ sheet-panel[data-position="center"], sheet-panel[data-desktop="true"][data-posit
 
 sheet-header, sheet-footer {
   box-sizing: border-box;
-  touch-action: none;
+  touch-action: pinch-zoom;
   flex-shrink: 0;
   display: block;
 }
@@ -222,7 +235,7 @@ sheet-panel[data-position="right"] {
 }
 
 sheet-panel[data-position="left"], sheet-panel[data-position="right"] {
-  touch-action: none;
+  touch-action: pinch-zoom;
 }
 
 sheet-panel[data-position="left"]:before, sheet-panel[data-position="right"]:before {
@@ -285,28 +298,46 @@ sheet-content {
   min-height: 0;
   padding: var(--sheet-content-padding);
   overscroll-behavior: contain;
-  touch-action: pan-x pan-y;
+  touch-action: manipulation;
   -webkit-overflow-scrolling: touch;
   flex: 1;
   display: block;
   overflow: auto;
 }
 
+sheet-panel {
+  --_sheet-safe-float: 0px;
+}
+
+sheet-panel[data-mode="card"], sheet-panel[data-position="center"] {
+  --_sheet-safe-float: var(--sheet-card-margin);
+}
+
 sheet-footer {
   padding: var(--sheet-footer-padding);
+  padding-bottom: calc(var(--sheet-footer-padding) +
+			max(0px, env(safe-area-inset-bottom, 0px) - var(--_sheet-safe-float, 0px)));
   background: var(--sheet-footer-background);
 }
 
-sheet-panel[data-position="bottom"] sheet-footer {
-  padding-bottom: calc(var(--sheet-footer-padding) + env(safe-area-inset-bottom, 0px));
-}
-
 sheet-panel[data-position="left"] sheet-footer {
-  padding-left: calc(var(--sheet-footer-padding) + env(safe-area-inset-left, 0px));
+  padding-left: calc(var(--sheet-footer-padding) +
+			max(0px, env(safe-area-inset-left, 0px) - var(--_sheet-safe-float, 0px)));
 }
 
 sheet-panel[data-position="right"] sheet-footer {
-  padding-right: calc(var(--sheet-footer-padding) + env(safe-area-inset-right, 0px));
+  padding-right: calc(var(--sheet-footer-padding) +
+			max(0px, env(safe-area-inset-right, 0px) - var(--_sheet-safe-float, 0px)));
+}
+
+:is(sheet-panel[data-position="left"]:has(sheet-footer) sheet-header, sheet-panel[data-position="left"]:has(sheet-footer) sheet-content) {
+  padding-left: calc(var(--sheet-content-padding) +
+			max(0px, env(safe-area-inset-left, 0px) - var(--_sheet-safe-float, 0px)));
+}
+
+:is(sheet-panel[data-position="right"]:has(sheet-footer) sheet-header, sheet-panel[data-position="right"]:has(sheet-footer) sheet-content) {
+  padding-right: calc(var(--sheet-content-padding) +
+			max(0px, env(safe-area-inset-right, 0px) - var(--_sheet-safe-float, 0px)));
 }
 
 @media (prefers-reduced-motion: reduce) {

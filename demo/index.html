@@ -2,7 +2,12 @@
 <html lang="en">
 	<head>
 		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<!-- viewport-fit=cover is what makes env(safe-area-inset-*) resolve to
+		     anything but 0px on iOS. sheet.css pads a bottom, left or right panel
+		     past the notch and the home indicator, and pads sheet-footer again on
+		     top of that; without this tag every one of those declarations is a
+		     silent no-op and the footer's buttons sit under the indicator. -->
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<title>Sheet — @magic-spells</title>
 		<meta
 			name="description"
@@ -646,7 +651,15 @@
 				padding: 1.05rem 1.25rem;
 				color: var(--cream);
 				text-align: left;
-				background: rgba(255, 255, 255, 0.035);
+				/* Level with the section they sit in, so only the border draws them.
+				   The hover lift is a translucent layer rather than a fixed colour
+				   because the section itself lightens to --bg-card-hover whenever the
+				   pointer is anywhere inside it — an absolute value would collide with
+				   that and read as the hovered row sinking instead of rising. Both
+				   states declare a gradient so the transition has something to
+				   interpolate. */
+				background-color: var(--bg-card);
+				background-image: linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0));
 				border: 1px solid var(--border-accent);
 				border-radius: 10px;
 				font: inherit;
@@ -658,7 +671,7 @@
 			}
 
 			.profile-row:hover {
-				background: rgba(255, 255, 255, 0.06);
+				background-image: linear-gradient(rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.05));
 				border-color: var(--iris-dim);
 			}
 
@@ -1459,7 +1472,7 @@
 				<h2>Three heights, and the sheet lands on one.</h2>
 				<p class="demo-desc">
 					<code>snap-points="20vh 55vh 90vh"</code> gives the sheet several resting heights — any
-					CSS length, re-measured on resize. Drag between them from the header, the backdrop, or the
+					CSS length, re-measured on resize. Drag between them from the header, the footer, or the
 					content once it hits its scroll top. A flick past <code>0.5 px/ms</code> steps exactly one
 					snap, a slow release lands on the nearest, and a downward flick from the lowest snap
 					dismisses. Snap points are a <strong>mobile-profile</strong> attribute: past
@@ -1560,55 +1573,53 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 					over. Resize while a sheet is open and it morphs in place, with no reopen and no lost
 					focus.
 				</p>
-				<div class="stage">
-					<div class="profile-list">
-						<button class="profile-row" data-open="quickshop-panel" aria-label="Quick shop">
-							<span class="profile-row-compare">
-								<span class="profile-row-col">
-									<span class="profile-row-label">Mobile</span>
-									<span class="profile-row-value">Bottom sheet</span>
-								</span>
-								<span class="profile-row-arrow" aria-hidden="true">→</span>
-								<span class="profile-row-col">
-									<span class="profile-row-label">Desktop</span>
-									<span class="profile-row-value">Right drawer</span>
-								</span>
+				<div class="profile-list">
+					<button class="profile-row" data-open="quickshop-panel" aria-label="Quick shop">
+						<span class="profile-row-compare">
+							<span class="profile-row-col">
+								<span class="profile-row-label">Mobile</span>
+								<span class="profile-row-value">Bottom sheet</span>
 							</span>
-							<span class="profile-row-action" aria-hidden="true">Open ›</span>
-						</button>
+							<span class="profile-row-arrow" aria-hidden="true">→</span>
+							<span class="profile-row-col">
+								<span class="profile-row-label">Desktop</span>
+								<span class="profile-row-value">Right drawer</span>
+							</span>
+						</span>
+						<span class="profile-row-action" aria-hidden="true">Open ›</span>
+					</button>
 
-						<button class="profile-row" data-open="confirm-panel" aria-label="Discard draft">
-							<span class="profile-row-compare">
-								<span class="profile-row-col">
-									<span class="profile-row-label">Mobile</span>
-									<span class="profile-row-value">Action sheet</span>
-								</span>
-								<span class="profile-row-arrow" aria-hidden="true">→</span>
-								<span class="profile-row-col">
-									<span class="profile-row-label">Desktop</span>
-									<span class="profile-row-value">Centred modal</span>
-								</span>
+					<button class="profile-row" data-open="confirm-panel" aria-label="Discard draft">
+						<span class="profile-row-compare">
+							<span class="profile-row-col">
+								<span class="profile-row-label">Mobile</span>
+								<span class="profile-row-value">Action sheet</span>
 							</span>
-							<span class="profile-row-action" aria-hidden="true">Open ›</span>
-						</button>
+							<span class="profile-row-arrow" aria-hidden="true">→</span>
+							<span class="profile-row-col">
+								<span class="profile-row-label">Desktop</span>
+								<span class="profile-row-value">Centred modal</span>
+							</span>
+						</span>
+						<span class="profile-row-action" aria-hidden="true">Open ›</span>
+					</button>
 
-						<button class="profile-row" data-open="filters-panel" aria-label="Filters">
-							<span class="profile-row-compare">
-								<span class="profile-row-col">
-									<span class="profile-row-label">Mobile</span>
-									<span class="profile-row-value">Bottom sheet</span>
-								</span>
-								<span class="profile-row-arrow" aria-hidden="true">→</span>
-								<span class="profile-row-col">
-									<span class="profile-row-label">Desktop</span>
-									<span class="profile-row-value">Left drawer</span>
-								</span>
+					<button class="profile-row" data-open="filters-panel" aria-label="Filters">
+						<span class="profile-row-compare">
+							<span class="profile-row-col">
+								<span class="profile-row-label">Mobile</span>
+								<span class="profile-row-value">Bottom sheet</span>
 							</span>
-							<span class="profile-row-action" aria-hidden="true">Open ›</span>
-						</button>
-					</div>
-					<output class="readout" id="width-readout">Measuring the viewport…</output>
+							<span class="profile-row-arrow" aria-hidden="true">→</span>
+							<span class="profile-row-col">
+								<span class="profile-row-label">Desktop</span>
+								<span class="profile-row-value">Left drawer</span>
+							</span>
+						</span>
+						<span class="profile-row-action" aria-hidden="true">Open ›</span>
+					</button>
 				</div>
+				<output class="readout" id="width-readout">Measuring the viewport…</output>
 				<pre
 					class="code-block"><span class="hl-cm">// bottom sheet on a phone, right-hand drawer that shrinks away on a desktop</span>
 &lt;<span class="hl-tag">sheet-panel</span>
@@ -2767,9 +2778,13 @@ sheet.hide();</pre>
 				</p>
 				<p class="ref-note">
 					Never make a drag the only route to an action. Interactive descendants stay clickable
-					because pointer capture is deferred until movement passes <code>5px</code>, and a backdrop
-					gesture under <code>10px</code> and <code>300ms</code> is read as a tap rather than a
-					drag.
+					because pointer capture is deferred until movement passes <code>5px</code>. The scrim
+					is not a drag surface at all — <code>showModal()</code> makes the native
+					<code>::backdrop</code> win every hit test out there, so
+					<code>&lt;dialog-backdrop&gt;</code> only paints. A click on it dismisses when the
+					<code>pointerdown</code> landed on the dialog itself and the click falls outside
+					the dialog's rect: no distance or duration gate, which is what keeps a near-miss
+					swipe at the sheet's edge from being refused.
 				</p>
 
 				<h3 class="ref-heading">Browser support</h3>

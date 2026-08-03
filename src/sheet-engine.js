@@ -801,7 +801,21 @@ function buildOpenKeyframes(profile, size, restSize, lowestSize = 0) {
  * @returns {Object} `{live, hidden, away, hiddenAway}`.
  */
 function exitValues(profile, size, restSize, lowestSize = 0, effect = profile.effect) {
-	const away = awayTranslation(profile, size, restSize, lowestSize);
+	// Read the displacement from the pose #applyFrame actually allowed onto the
+	// screen. Using the raw logical size made a right sheet at restSize=400 and
+	// size=420 produce away=-20 even though its drag frame was capped at p=1 and
+	// painted x=0; dismiss() then repainted that -20px pose synchronously before
+	// leaving. This is returnToRest's cap-not-floor rule mirrored onto the exit.
+	//
+	// Routing through paintedProgress keeps the exception where it already lives:
+	// bottom profiles remain uncapped, while awayTranslation still owns the
+	// resize-versus-translate split through resizesWithSnaps.
+	const logicalProgress = size / restSize;
+	const painted = paintedProgress(profile.position, logicalProgress, 'dragging');
+	// Keep the raw value when no cap was applied. Besides making the rule plain,
+	// this avoids shifting ordinary geometry through a divide/multiply round-trip.
+	const paintedSize = painted === logicalProgress ? size : painted * restSize;
+	const away = awayTranslation(profile, paintedSize, restSize, lowestSize);
 	const hidden = effectValues(
 		{ ...profile, effect },
 		{
@@ -1719,11 +1733,10 @@ class SheetEngine extends EventEmitter {
 		_.#blobTo = null;
 		_.#morphTrigger = null;
 		_.#gestureExit = false;
-		// Both of these are terminal state that only #applyFrame would otherwise
-		// clear, and stop() never paints a frame. dialog-panel calls this on its
-		// force-close repair path — a `<form method="dialog">` submit or an
-		// app-level dialog.close() — which can land mid-flight and emits no
-		// beforeHide, so nothing else runs either.
+		// These are terminal state whose ordinary owners never run through stop().
+		// dialog-panel calls it on the force-close repair path — a
+		// `<form method="dialog">` submit or an app-level dialog.close() — which can
+		// land mid-flight, never paints a frame, and emits no beforeHide.
 		//
 		// A stale #morphing leaves #applyFrame inert forever: the next show()
 		// paints no p=0 frame and showModal() promotes a dialog sitting at CSS
@@ -1731,10 +1744,14 @@ class SheetEngine extends EventEmitter {
 		// prevent. A stale #flightPhase of 'showing' makes #flightEnvelope mistake
 		// the NEXT entrance for the same flight and hold the old opacity through
 		// Math.max, so a reopened sheet pops to the scrim it was stopped under.
+		// A stale #pendingDismissVelocity survives because hide() — its normal
+		// consumer — never ran: queuing 3px/ms before the stop changed the next
+		// plain close's first progress from 0.868000 to 0.811481.
 		_.#morphing = false;
 		_.#flightPhase = null;
-		// Same argument, third flag: a force-close landing inside a hide→show
-		// reversal leaves #reversalTrack set with the track itself discarded, and
+		_.#pendingDismissVelocity = 0;
+		// The same force-close argument applies to a hide→show reversal: landing
+		// inside one leaves #reversalTrack set with the track itself discarded, and
 		// the next #rebuildOpenTrack would then rebase a frame from whatever
 		// #frames had become.
 		_.#reversalTrack = false;

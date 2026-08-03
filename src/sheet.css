@@ -96,10 +96,34 @@ dialog-panel[morph][state]:has(sheet-panel[data-position='bottom']:not([data-des
    sized by its content, exactly like `center` — a desktop dialog that happens to
    sit on the bottom edge rather than in the middle of the screen. `fit-content`
    for the same reason center uses it: an 85vh slab holding four rows and a
-   paragraph is mostly empty surface. The max-height is the only ceiling up here,
-   so a tall panel still scrolls inside itself rather than running off screen. */
+   paragraph is mostly empty surface. Mode has no say in the HEIGHT, so this one
+   stays mode-agnostic and mutually exclusive with the rule above at (0,4,3). */
 dialog-panel[morph][state]:has(sheet-panel[data-desktop='true'][data-position='bottom']) > dialog {
 	height: fit-content;
+}
+
+/* The max-height is the only ceiling up here, so a tall panel still scrolls
+   inside itself rather than running off screen — but the ceiling IS card
+   geometry, so unlike the height it has to be said conditionally. Declared once
+   on the mode-agnostic selector it subtracted two card margins from an edge-mode
+   panel that is `inset: auto 0 0` and floats by nothing, leaving a 24px strip of
+   scrim above a panel welded to the bottom edge. Both selectors below are
+   (0,5,3) — 3 elements, 5 attributes ([morph], [state], [data-desktop],
+   [data-mode], [data-position]) — and cannot co-match, so neither has to keep
+   winning on source order. `:not([data-mode='card'])` rather than
+   [data-mode='edge'] so a panel whose profile has not been applied yet still
+   gets a ceiling rather than the base rule's `max-height: none`. */
+dialog-panel[morph][state]:has(
+		sheet-panel[data-desktop='true'][data-position='bottom']:not([data-mode='card'])
+	)
+	> dialog {
+	max-height: 100dvh;
+}
+
+dialog-panel[morph][state]:has(
+		sheet-panel[data-desktop='true'][data-mode='card'][data-position='bottom']
+	)
+	> dialog {
 	max-height: calc(100dvh - 2 * var(--sheet-card-margin));
 }
 
@@ -142,9 +166,32 @@ dialog-panel[morph][state]:has(sheet-panel[data-position='center']) > dialog {
 	border-radius: var(--sheet-card-border-radius);
 }
 
-dialog-panel[morph][state]:has(sheet-footer) > dialog {
+/* The footer owns the safe area when there is a footer; the dialog owns it when
+   there isn't. That has to be stated once PER POSITION, because :has() carries
+   the specificity of its argument:
+
+     ...:has(sheet-panel[data-position='bottom']) > dialog   (0,3,3)  the padding
+     ...:has(sheet-footer) > dialog                          (0,2,3)  the reset
+
+   The old single reset was that second selector and lost all three position
+   rules regardless of source order, so on a notched device the dialog kept
+   env(safe-area-inset-bottom) AND sheet-footer added it again — 34px counted
+   twice, in a band of dialog padding OUTSIDE the footer, which also cut
+   --sheet-footer-background short of the panel's edge and drew a stripe. Naming
+   the position inside the same :has() as the footer buys a fourth element:
+   (0,3,4) beats (0,3,3) on element count. Descendant rather than child, so these
+   match exactly where the sheet-footer rules at the foot of this file do. The
+   card rules below reach (0,4,3) and outrank these, but they zero the same
+   paddings themselves, so there is nothing left to disagree about. */
+dialog-panel[morph][state]:has(sheet-panel[data-position='bottom'] sheet-footer) > dialog {
 	padding-bottom: 0;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position='left'] sheet-footer) > dialog {
 	padding-left: 0;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position='right'] sheet-footer) > dialog {
 	padding-right: 0;
 }
 
@@ -300,7 +347,13 @@ sheet-footer {
 	display: block;
 	box-sizing: border-box;
 	flex-shrink: 0;
-	touch-action: none;
+	/* Rigid drag surfaces: no native PAN may begin on either. `pinch-zoom` rather
+	   than `none` because the two are not the same refusal — `none` also refuses
+	   a two-finger pinch, and the UA refuses it before the drag-claim logic is
+	   ever consulted, so a low-vision user could not enlarge a form in any sheet
+	   (WCAG 1.4.4). A pinch is two-finger and cannot collide with the
+	   single-finger drag this is protecting. */
+	touch-action: pinch-zoom;
 }
 
 sheet-header {
@@ -350,10 +403,13 @@ sheet-panel[data-position='right'] {
 /* The strip is a rigid drag surface like the header and footer, so no native
    pan may begin on it. Scroll containers inside the content implement their
    own pans below this element, so their touch-action chains never reach the
-   panel and nested scrolling is unaffected. */
+   panel and nested scrolling is unaffected. `pinch-zoom` rather than `none` for
+   the same reason as the header and footer: this element backs a side sheet
+   whose content is too short to scroll, so `none` here made the whole panel a
+   region the page could not be enlarged in at all. */
 sheet-panel[data-position='left'],
 sheet-panel[data-position='right'] {
-	touch-action: none;
+	touch-action: pinch-zoom;
 }
 
 sheet-panel[data-position='left']::before,
@@ -439,26 +495,97 @@ sheet-content {
 	   once the sheet has claimed the drag. Both axes therefore stay natively
 	   pannable, so a nested horizontal scroller — and a tall side panel — still
 	   scrolls by touch. Pinning one axis per profile forbade panning on the
-	   other for every descendant. */
-	touch-action: pan-x pan-y;
+	   other for every descendant. `manipulation` is exactly `pan-x pan-y
+	   pinch-zoom`, and the third keyword is the point: it is NOT implied by the
+	   first two, so the pair the claim logic wanted also refused every two-finger
+	   zoom inside the sheet, before the claim logic saw the gesture at all. */
+	touch-action: manipulation;
 	-webkit-overflow-scrolling: touch;
+}
+
+/* How far the panel's own box already floats from the screen edges an
+   env(safe-area-inset-*) is measured from. An edge-mode panel is welded to them
+   and floats by nothing; a card floats by --sheet-card-margin on every side it
+   touches. A centred dialog floats by its own centring rather than by a margin,
+   but its max-height cap is `100dvh - 2 * --sheet-card-margin`, so its gap to
+   the bottom edge is that margin at the cap and strictly more below it — the
+   same number is the tightest value that can never under-reserve. Internal, like
+   the data-* attributes: consumers configure --sheet-card-margin, not this. */
+sheet-panel {
+	--_sheet-safe-float: 0px;
+}
+
+sheet-panel[data-mode='card'],
+sheet-panel[data-position='center'] {
+	--_sheet-safe-float: var(--sheet-card-margin);
 }
 
 sheet-footer {
 	padding: var(--sheet-footer-padding);
+	/* EVERY profile's footer is the bottom-most surface of a column-flex panel,
+	   so it — not the dialog — is what stands between a button and the home
+	   indicator, whichever edge the sheet is dragged from. Keying this to the
+	   dismiss axis instead left a full-height side sheet reserving nothing at all
+	   in portrait, where safe-area-inset-left is 0, and dropped its footer
+	   buttons into the 34px band whose lower half the system swipe-up eats.
+	   Discounting the float is what stops a card measuring from the wrong edge: a
+	   card 12px above the screen needs 22px of a 34px inset, not all 34. */
+	padding-bottom: calc(
+		var(--sheet-footer-padding) +
+			max(0px, env(safe-area-inset-bottom, 0px) - var(--_sheet-safe-float, 0px))
+	);
 	background: var(--sheet-footer-background);
 }
 
-sheet-panel[data-position='bottom'] sheet-footer {
-	padding-bottom: calc(var(--sheet-footer-padding) + env(safe-area-inset-bottom, 0px));
-}
-
+/* The dismiss-axis inset a side sheet needs on top of the bottom one above.
+   `bottom` and `center` need no axis rule of their own — their axis inset IS
+   that bottom one. */
 sheet-panel[data-position='left'] sheet-footer {
-	padding-left: calc(var(--sheet-footer-padding) + env(safe-area-inset-left, 0px));
+	padding-left: calc(
+		var(--sheet-footer-padding) +
+			max(0px, env(safe-area-inset-left, 0px) - var(--_sheet-safe-float, 0px))
+	);
 }
 
 sheet-panel[data-position='right'] sheet-footer {
-	padding-right: calc(var(--sheet-footer-padding) + env(safe-area-inset-right, 0px));
+	padding-right: calc(
+		var(--sheet-footer-padding) +
+			max(0px, env(safe-area-inset-right, 0px) - var(--_sheet-safe-float, 0px))
+	);
+}
+
+/* A side sheet's axis inset runs the panel's WHOLE height, unlike a bottom
+   sheet's, whose only edge is the one the footer already covers. So handing that
+   edge to the footer — which is what the dialog rules near the top of this file
+   do once a footer exists — leaves the header and content at their bare
+   --sheet-content-padding, under a landscape notch. They take the same
+   reservation, gated on the same footer, because without one the dialog still
+   holds the padding for the whole panel and these would double-count it.
+
+     sheet-panel[data-position='left']:has(sheet-footer) sheet-header
+       -> (0,1,3): sheet-panel(0,0,1) + [data-position](0,1,0)
+                   + :has(sheet-footer)(0,0,1) + sheet-header(0,0,1)
+
+   The two declarations that could wipe a longhand are shorthands, and both are
+   bare element selectors at (0,0,1) — `sheet-header`'s padding and
+   `sheet-content`'s — so (0,1,3) beats them on `b` whatever the source order.
+   Nothing else sets padding-left or padding-right on either element: the three
+   other header rules are padding-TOP longhands, and the panel's own
+   padding-left/right belong to the handle strip, not to these children. */
+sheet-panel[data-position='left']:has(sheet-footer) sheet-header,
+sheet-panel[data-position='left']:has(sheet-footer) sheet-content {
+	padding-left: calc(
+		var(--sheet-content-padding) +
+			max(0px, env(safe-area-inset-left, 0px) - var(--_sheet-safe-float, 0px))
+	);
+}
+
+sheet-panel[data-position='right']:has(sheet-footer) sheet-header,
+sheet-panel[data-position='right']:has(sheet-footer) sheet-content {
+	padding-right: calc(
+		var(--sheet-content-padding) +
+			max(0px, env(safe-area-inset-right, 0px) - var(--_sheet-safe-float, 0px))
+	);
 }
 
 /* The morph is the only motion here a media query can reach, because it is the

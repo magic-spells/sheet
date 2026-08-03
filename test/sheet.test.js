@@ -940,7 +940,11 @@ elementTest('profile morph durations accept only CSS time tokens', (t) => {
 		['600ms', 600],
 		['0.6s', 600],
 		['600', 600],
+		['601', 600],
+		['0', 0],
+		['0.', 0],
 		['0s', 0],
+		['calc(300ms + 300ms)', 600],
 		['garbage', 600],
 	];
 	let from = 'right';
@@ -962,6 +966,31 @@ elementTest('profile morph durations accept only CSS time tokens', (t) => {
 
 		from = to;
 	}
+});
+
+// The :root declaration inside the reduced-motion media query can lose the
+// cascade to a later or more specific consumer token. Reading the preference
+// itself is what keeps both users of the token off: the trigger blob and the
+// profile FLIP.
+elementTest('the reduced-motion media query overrides a consumer morph duration', (t) => {
+	const frames = captureFrames(t);
+	const originalMatchMedia = window.matchMedia;
+	window.matchMedia = () => ({ matches: true });
+	t.after(() => {
+		window.matchMedia = originalMatchMedia;
+	});
+	const { dialog, engine, panel, sheet } = makeMorphSheet(t);
+	dialog.style.setProperty('--sheet-morph-duration', '400ms');
+
+	sheet.show(makeTrigger());
+	assert.equal(panel.showModes[0], true, 'the trigger uses the direct spring transport');
+	assert.equal(MorphEngine.instances.length, 0, 'no trigger blob is built');
+	drainFrames(frames);
+	assert.equal(engine.state, 'shown');
+
+	startProfileMorph(sheet, 'bottom', 'left');
+	assert.equal(engine.morphing, false, 'the profile swaps without a FLIP');
+	assert.equal(dialog.style.transition, '');
 });
 
 // The FLIP writes its pins onto the same inline properties a consumer may
@@ -1447,7 +1476,7 @@ elementTest('a vetoed trigger-morph show disarms the hidden engine', (t) => {
  */
 function scrimGesture(panel, pressTarget, release) {
 	panel.fire('pointerdown', { target: pressTarget });
-	const click = panel.fire('click', { target: pressTarget, ...release });
+	const click = panel.fire('click', { target: pressTarget, detail: 1, ...release });
 	return click.propagationStopped;
 }
 
@@ -1493,6 +1522,207 @@ elementTest('dismiss="none" still refuses a scrim tap it would otherwise allow',
 
 	assert.equal(sheet.dismissPolicy.backdrop, false);
 	assert.equal(scrimGesture(panel, dialog, { clientX: 200, clientY: -80 }), true);
+});
+
+elementTest('a pointerless click outside the rect is never swallowed by backdrop policy', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const button = new StubElement('button');
+	// Pointerless clicks always report (0,0), so the rect must not contain the
+	// origin or this test returns at geometry and passes without exercising the
+	// capture-phase bug.
+	dialog.rect = {
+		top: 360,
+		left: 0,
+		right: 420,
+		bottom: 900,
+		width: 420,
+		height: 540,
+	};
+	dialog.contains = (target) => target === dialog || target === button;
+	const activate = () =>
+		panel.fire('click', {
+			target: button,
+			detail: 0,
+			clientX: 0,
+			clientY: 0,
+		});
+
+	assert.equal(activate().propagationStopped, false);
+	sheet.setAttribute('dismiss', 'none');
+	assert.equal(activate().propagationStopped, false);
+});
+
+elementTest('a real scrim tap at the same outside coordinates still passes through', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	dialog.rect = {
+		top: 360,
+		left: 0,
+		right: 420,
+		bottom: 900,
+		width: 420,
+		height: 540,
+	};
+
+	assert.equal(scrimGesture(panel, dialog, { clientX: 0, clientY: 0 }), false);
+});
+
+/**
+ * Replays a pointerless click the way the browser delivers one, because the stub
+ * neither bubbles nor honours the capture flag.
+ *
+ * The two calls are the two seams this mechanism is built on, in the order a real
+ * dispatch visits them: #outsideGuard runs in CAPTURE on the dialog-panel, on the
+ * way down, and records the source; #pointerlessArm runs in BUBBLE on the panel,
+ * on the way back up, after the target's own listeners and before the event
+ * reaches the dialog dialog-panel misreads it on. `arm: false` stops between the
+ * two, which is exactly where a consumer's own click handler lives.
+ * @param {Object} sheet - SheetPanel under test.
+ * @param {Object} panel - dialog-panel stub.
+ * @param {Object} target - Element the activation landed on.
+ * @param {boolean} [arm=true] - Whether to run the bubble half.
+ */
+function pointerlessClick(sheet, panel, target, arm = true) {
+	panel.fire('click', { target, detail: 0, clientX: 0, clientY: 0 });
+	if (arm) sheet.fire('click', { target });
+}
+
+elementTest('a pointerless non-closing control vetoes dialog-panel spurious hide', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const button = new StubElement('button');
+	dialog.contains = (target) => target === dialog || target === button;
+
+	pointerlessClick(sheet, panel, button);
+	const beforeHide = panel.fire('beforeHide');
+
+	assert.equal(beforeHide.defaultPrevented, true);
+});
+
+// The other hide that arrives inside the same dispatch, and the reason the flag
+// alone is not enough: a consumer's own `sheet.hide()` runs at the button, BELOW
+// the panel, so it reaches beforeHide before anything has armed. Refusing it
+// would make a keyboard user unable to save-and-close.
+elementTest('a control that hides itself before the arm seam is not vetoed', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const button = new StubElement('button');
+	dialog.contains = (target) => target === dialog || target === button;
+
+	pointerlessClick(sheet, panel, button, false);
+
+	assert.equal(panel.fire('beforeHide').defaultPrevented, false);
+});
+
+elementTest('a pointerless close control still reaches the deliberate hide route', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const close = new StubElement('button');
+	close.closestResults.set('[data-action-hide-dialog]', close);
+	dialog.contains = (target) => target === dialog || target === close;
+
+	pointerlessClick(sheet, panel, close);
+	const beforeHide = panel.fire('beforeHide');
+
+	assert.equal(beforeHide.defaultPrevented, false);
+});
+
+elementTest('beforeHide without a pointerless click is never vetoed', (t) => {
+	const { panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+
+	assert.equal(panel.fire('beforeHide').defaultPrevented, false);
+});
+
+// A macrotask boundary, not a microtask one. The event loop drains microtasks
+// between listener callbacks, so a microtask-scheduled release would have expired
+// before dialogClick was ever judged by it — the veto never fired at all.
+elementTest('the pointerless source expires after the click dispatch task', async (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const button = new StubElement('button');
+	dialog.contains = (target) => target === dialog || target === button;
+
+	pointerlessClick(sheet, panel, button);
+	await Promise.resolve();
+	assert.equal(panel.fire('beforeHide').defaultPrevented, true, 'survives a microtask');
+
+	pointerlessClick(sheet, panel, button);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.equal(panel.fire('beforeHide').defaultPrevented, false, 'released on the next task');
+});
+
+elementTest('each click and outer hidden event consume their own scrim press', (t) => {
+	const { dialog, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const button = new StubElement('button');
+	dialog.rect = {
+		top: 360,
+		left: 0,
+		right: 420,
+		bottom: 900,
+		width: 420,
+		height: 540,
+	};
+
+	panel.fire('pointerdown', { target: dialog });
+	assert.equal(
+		panel.fire('click', { target: button, detail: 0, clientX: 0, clientY: 0 }).propagationStopped,
+		false
+	);
+	assert.equal(
+		panel.fire('click', { target: dialog, detail: 1, clientX: 0, clientY: 0 }).propagationStopped,
+		true,
+		'the next click cannot inherit the consumed press'
+	);
+
+	panel.fire('pointerdown', { target: dialog });
+	panel.fire('hidden');
+	assert.equal(
+		panel.fire('click', { target: dialog, detail: 1, clientX: 0, clientY: 0 }).propagationStopped,
+		true,
+		"a reopened panel cannot inherit the previous run's press"
+	);
+});
+
+elementTest('nested dialog-panel lifecycle events do not drive the outer sheet', (t) => {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	const { engine, panel, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('snap-points', '200px 500px');
+	sheet.show();
+	drainFrames(frames);
+
+	sheet.fire('pointerdown', pointer());
+	sheet.fire('pointermove', pointer({ clientY: 120, timeStamp: 40 }));
+	assert.equal(engine.currentSize, 380);
+	assert.equal(panel.style.getPropertyValue('--sheet-progress'), '0.760');
+	assert.equal(panel.style.getPropertyValue('--sheet-backdrop-progress'), '1.000');
+	sheet.maxDisplayWidth = 399;
+	const nested = new StubElement('dialog-panel');
+
+	for (const type of ['beforeShow', 'beforeHide', 'shown', 'hidden']) {
+		const event = panel.fire(type, { target: nested });
+		assert.equal(event.defaultPrevented, false, `${type} is not vetoed`);
+		assert.equal(
+			panel.style.getPropertyValue('--sheet-progress'),
+			'0.760',
+			`${type} leaves panel progress untouched`
+		);
+		assert.equal(
+			panel.style.getPropertyValue('--sheet-backdrop-progress'),
+			'1.000',
+			`${type} leaves backdrop progress untouched`
+		);
+	}
+
+	sheet.fire('pointermove', pointer({ clientY: 200, timeStamp: 80 }));
+	assert.equal(engine.currentSize, 300, 'the outer drag stays active');
+	assert.equal(panel.style.getPropertyValue('--sheet-progress'), '0.600');
+	assert.equal(panel.style.getPropertyValue('--sheet-backdrop-progress'), '1.000');
 });
 
 elementTest('a dismissal vetoed at beforeHide reports the snap it actually landed on', (t) => {

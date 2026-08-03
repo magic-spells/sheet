@@ -174,6 +174,9 @@ class SheetPanel extends HTMLElement {
 	#gestures = [];
 	#scrollVeto = null;
 	#scrimPress = false;
+	#pointerlessClick = null;
+	#pointerlessArmed = false;
+	#pointerlessTimer = null;
 	#connected = false;
 	#profile = null;
 	#snaps = [];
@@ -222,6 +225,7 @@ class SheetPanel extends HTMLElement {
 		const _ = this;
 		_.#handlers = {
 			beforeShow: (event) => {
+				if (event.target !== _.#panelRef) return;
 				if (window.innerWidth > _.maxDisplayWidth) {
 					event.preventDefault();
 					return;
@@ -232,7 +236,32 @@ class SheetPanel extends HTMLElement {
 				if (_.#engine?.state !== 'hiding') _.#setProgress(0);
 				_.#prepareOpen();
 			},
-			beforeHide: () => {
+			beforeHide: (event) => {
+				if (event.target !== _.#panelRef) return;
+				const source = _.#pointerlessArmed ? _.#pointerlessClick : null;
+				// dialog-panel's bubble handler reads a pointerless click's (0,0)
+				// coordinates as backdrop and calls hide(). At this point the recorded
+				// source supplies the bit beforeHide normally lacks: a non-closing
+				// control inside this dialog must keep the panel open, while Escape,
+				// close buttons, real scrim taps, and app-driven hide() stay distinct.
+				//
+				// ARMED, not merely recorded, and that is what separates this hide from
+				// a consumer's own. Both arrive inside the same click dispatch, so the
+				// flag alone cannot tell them apart — a `<button>` whose handler calls
+				// sheet.hide() would be refused exactly like the spurious one, and a
+				// keyboard user could never save-and-close. #pointerlessArm is bound on
+				// the PANEL, which sits between any control and the dialog, so it fires
+				// after the target's own listeners have run and before dialogClick sees
+				// the event. A hide raised below that seam is the consumer's; one raised
+				// above it is dialog-panel misreading the coordinates.
+				if (
+					source &&
+					_.#dialogRef?.contains(source) &&
+					!source.closest?.('[data-action-hide-dialog]')
+				) {
+					event.preventDefault();
+					return;
+				}
 				// Covers every route out: gesture dismissal, close button,
 				// Escape, backdrop click, or a programmatic hide().
 				const interrupted = _.#drag.active ? _.#drag : null;
@@ -263,7 +292,8 @@ class SheetPanel extends HTMLElement {
 				// the engine is about to run.
 				_.#finishMorph();
 			},
-			shown: () => {
+			shown: (event) => {
+				if (event.target !== _.#panelRef) return;
 				_.#setProgress(1);
 				_.#flushPendingProfile();
 				// The only moment the observer can be armed. #prepareOpen runs from
@@ -273,8 +303,10 @@ class SheetPanel extends HTMLElement {
 				// a window resize happened to rebuild the profile while it sat open.
 				_.#syncContentObserver();
 			},
-			hidden: () => {
+			hidden: (event) => {
+				if (event.target !== _.#panelRef) return;
 				_.#drag = { active: false };
+				_.#scrimPress = false;
 				_.#proxyRevealed = false;
 				// The force-close paths (stop(), a native close repair) emit no
 				// beforeHide, so this is the only hook that can clear a #waitForMorph
@@ -302,31 +334,63 @@ class SheetPanel extends HTMLElement {
 			scrimPress: (event) => {
 				_.#scrimPress = event.target === _.#dialogRef;
 			},
+			// Bubble phase on the panel, which is the one node strictly between any
+			// control inside the sheet and the dialog dialog-panel listens on. Passing
+			// here means the target's own handlers have already had the click, so a
+			// hide that arrives after this is not theirs. See beforeHide.
+			pointerlessArm: (event) => {
+				if (event.target === _.#pointerlessClick) _.#pointerlessArmed = true;
+			},
 			outsideGuard: (event) => {
-				if (!_.#dialogRef) return;
-				// Geometry, not target, and that is load-bearing in BOTH directions.
-				// The native ::backdrop reports the dialog itself as its target, so a
-				// scrim tap can only be recognised by position — the same test
-				// dialog-panel uses, deliberately. And a drag that began on panel
-				// content arrives retargeted to whatever held pointer capture, which
-				// is inside the panel, so a target-based exemption would wave through
-				// the exact release this guard exists to catch. Every ordinary click
-				// on panel content lands inside the rect and returns here.
-				const rect = _.#dialogRef.getBoundingClientRect();
-				const outside =
-					event.clientX < rect.left ||
-					event.clientX > rect.right ||
-					event.clientY < rect.top ||
-					event.clientY > rect.bottom;
-				if (!outside) return;
-				// Two separate reasons to refuse an outside click, and they are
-				// deliberately not the same question. The policy may forbid backdrop
-				// dismissal outright; and a gesture that started on panel content is a
-				// selection or a mis-drag, never a tap, however far out it let go.
-				// A keyboard-driven click carries no preceding pointerdown, but it is
-				// dispatched at the activated element's own position — inside the rect
-				// — so it returns above rather than reaching this line.
-				if (!_.dismissPolicy.backdrop || !_.#scrimPress) event.stopPropagation();
+				try {
+					if (!_.#dialogRef) return;
+					if (event.detail === 0) {
+						// Keyboard activation and element.click() report (0,0), which reads
+						// as outside for every profile whose dialog does not touch the
+						// viewport origin. Swallowing that click here in capture killed both
+						// the target's own handlers and dialog-panel's delegated
+						// [data-action-hide-dialog] handler before either could run.
+						_.#pointerlessClick = event.target;
+						_.#pointerlessArmed = false;
+						// setTimeout, never queueMicrotask. The event loop runs a microtask
+						// checkpoint after every listener callback whose stack empties, so a
+						// microtask queued here is drained before the NEXT listener in the
+						// same dispatch — the flag was gone long before dialogClick could be
+						// judged by it, and the sheet closed anyway. A macrotask is the
+						// first point after the whole dispatch has run.
+						clearTimeout(_.#pointerlessTimer);
+						_.#pointerlessTimer = setTimeout(() => {
+							_.#pointerlessTimer = null;
+							_.#pointerlessClick = null;
+							_.#pointerlessArmed = false;
+						}, 0);
+						return;
+					}
+					// Geometry, not target, and that is load-bearing in BOTH directions.
+					// The native ::backdrop reports the dialog itself as its target, so a
+					// scrim tap can only be recognised by position — the same test
+					// dialog-panel uses, deliberately. And a drag that began on panel
+					// content arrives retargeted to whatever held pointer capture, which
+					// is inside the panel, so a target-based exemption would wave through
+					// the exact release this guard exists to catch. Every ordinary pointer
+					// click on panel content lands inside the rect and returns here.
+					const rect = _.#dialogRef.getBoundingClientRect();
+					const outside =
+						event.clientX < rect.left ||
+						event.clientX > rect.right ||
+						event.clientY < rect.top ||
+						event.clientY > rect.bottom;
+					if (!outside) return;
+					// Two separate reasons to refuse an outside click, and they are
+					// deliberately not the same question. The policy may forbid backdrop
+					// dismissal outright; and a gesture that started on panel content is a
+					// selection or a mis-drag, never a tap, however far out it let go.
+					if (!_.dismissPolicy.backdrop || !_.#scrimPress) event.stopPropagation();
+				} finally {
+					// A click is the terminal event for exactly one press. Keeping this
+					// bit beyond it made the next click inherit stale gesture history.
+					_.#scrimPress = false;
+				}
 			},
 			// A native close — <form method="dialog"> or app-level dialog.close() —
 			// landing between the proxy reveal and the blob settle reaches neither of
@@ -472,6 +536,9 @@ class SheetPanel extends HTMLElement {
 			_.#panelRef.addEventListener('pointerdown', _.#handlers.scrimPress, true);
 			_.#panelRef.addEventListener('click', _.#handlers.outsideGuard, true);
 		}
+		// On the panel, not the dialog-panel: it has to sit BELOW dialog-panel's own
+		// dialogClick in the tree, and above every control the sheet contains.
+		_.addEventListener('click', _.#handlers.pointerlessArm);
 		_.#dialogRef?.addEventListener('close', _.#handlers.close);
 
 		// `cancel` does not bubble and dialog-panel listens for it on the dialog
@@ -515,7 +582,12 @@ class SheetPanel extends HTMLElement {
 		_.#contentObserver = null;
 		clearTimeout(_.#contentRemeasureTimer);
 		_.#contentRemeasureTimer = null;
+		clearTimeout(_.#pointerlessTimer);
+		_.#pointerlessTimer = null;
+		_.#pointerlessClick = null;
+		_.#pointerlessArmed = false;
 		_.#releaseMorphPins();
+		_.removeEventListener('click', _.#handlers.pointerlessArm);
 		_.#dialogRef?.removeEventListener('close', _.#handlers.close);
 
 		for (const gesture of _.#gestures) gesture.destroy();
@@ -1875,14 +1947,19 @@ class SheetPanel extends HTMLElement {
 	}
 
 	/**
-	 * Resolves the morph duration in milliseconds from the CSS token, so
-	 * `prefers-reduced-motion` (which zeroes it) collapses the morph to an
-	 * instant swap without a second switch in JS.
+	 * Resolves the morph duration in milliseconds from the CSS token.
+	 *
+	 * The reduced-motion CSS declaration can lose the cascade to a later or
+	 * more specific consumer token. Reading the preference here too prevents
+	 * that override from restoring both the profile FLIP and trigger blob.
 	 * @param {HTMLElement} dialog - Dialog carrying the token.
 	 * @returns {number} Duration in milliseconds.
 	 */
 	#morphDuration(dialog) {
+		if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return 0;
 		const raw = getComputedStyle(dialog).getPropertyValue('--sheet-morph-duration').trim();
+		const zero = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i);
+		if (zero && Number(zero[1]) === 0) return 0;
 		const match = raw.match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
 		if (!match) return 600;
 		const value = Number(match[1]);

@@ -25,7 +25,15 @@ function sharedBuild(overrides = {}) {
 		build: {
 			outDir,
 			emptyOutDir: false,
-			sourcemap: true,
+			// Dev only. The published tarball is `files: ["dist/"]`, and maps were
+			// 70% of it — 628kB of 887kB unpacked — because rolldown inlines
+			// `sourcesContent`. That shipped `src/` twice over (the `files` narrowing
+			// to dist alone did not stop it) and, in the UMD map, 72kB of dialog-panel
+			// and the three engines' source with it. `false` rather than `'hidden'`:
+			// both artifacts carry a `//# sourceMappingURL=` comment, so emitting the
+			// map and merely withholding it from the tarball would 404 in devtools.
+			// The demo keeps its maps — demo/dist is not published.
+			sourcemap: isDev,
 			target: 'es2022',
 			reportCompressedSize: !isDev,
 			watch: isDev ? {} : null,

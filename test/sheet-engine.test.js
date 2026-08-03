@@ -1056,6 +1056,44 @@ test('stop clears a stranded morph after the blob already hid', () => {
 	engine.destroy();
 });
 
+test('stop clears a queued dismissal velocity before the next run', async (t) => {
+	const exitProgress = async (queueStaleVelocity) => {
+		const frames = captureFrames(t);
+		const engine = makeEngine();
+		const dialog = makeDialog();
+		let shown = engine.show({ to: dialog });
+		drainFrames(frames);
+		await shown;
+
+		if (queueStaleVelocity) {
+			engine.setDismissVelocity(3);
+			engine.stop();
+			shown = engine.show({ to: dialog });
+			drainFrames(frames);
+			await shown;
+		}
+
+		const progress = [];
+		engine.on('change', ({ phase, progress: value }) => {
+			if (phase === 'hiding') progress.push(value);
+		});
+		const hidden = engine.hide();
+		drainFrames(frames);
+		await hidden;
+		engine.destroy();
+		return progress;
+	};
+
+	const clean = await exitProgress(false);
+	const afterStop = await exitProgress(true);
+
+	// Before the reset, the clean run began 0.868000, 0.695344, 0.527590,
+	// 0.384136 while the stranded 3px/ms seed began 0.811481, 0.621417,
+	// 0.455761, 0.322713. Exact sequence equality makes the unrelated close
+	// prove it inherited no part of the abandoned gesture.
+	assert.deepEqual(afterStop, clean);
+});
+
 test('reverse blob close supersedes settle and return springs', async (t) => {
 	for (const kind of ['settleTo', 'returnToRest']) {
 		const frames = captureFrames(t);
@@ -1475,6 +1513,71 @@ test('slide exit distance is signed per position and only as long as it needs to
 	);
 });
 
+test('a non-bottom exit starts at the exact capped drag pose', () => {
+	const restSize = 400;
+	for (const position of ['left', 'right', 'center']) {
+		const profile = profileFor(position);
+		for (const size of [restSize, restSize + 20]) {
+			const drag = new FrameEngine(buildDragKeyframes(profile, restSize, size, restSize));
+			const painted = drag.getFrame(paintedProgress(position, size / restSize, 'dragging'));
+			const exit = buildExitKeyframes(profile, size, restSize)[100];
+
+			assert.deepEqual(
+				exit.transform,
+				painted.transform,
+				`${position} exit at logical size ${size}px starts at its painted drag transform`
+			);
+		}
+	}
+});
+
+test('flush and inward-overpulled dismissals paint the same first frame', async (t) => {
+	const firstFrameFrom = async (inwardPull) => {
+		const frames = captureFrames(t);
+		const engine = new SheetEngine();
+		const dialog = makeDialog();
+		engine.setProfile(profileFor('right'));
+		engine.setSnaps([400], 0);
+		const shown = engine.show({ to: dialog });
+		drainFrames(frames);
+		await shown;
+
+		engine.dragBy(inwardPull);
+		const hidden = engine.dismiss();
+		const first = { ...dialog.style };
+		drainFrames(frames);
+		await hidden;
+		engine.destroy();
+		return first;
+	};
+
+	const flush = await firstFrameFrom(0);
+	const overpulled = await firstFrameFrom(-20);
+
+	// Both releases are painted at flush. Reading the raw 420px logical size
+	// made only the second exit synchronously jump 20px inward before leaving.
+	assert.deepEqual(overpulled, flush);
+});
+
+test('an overpulled bottom exit keeps its uncapped track byte-for-byte', () => {
+	assert.deepEqual(buildExitKeyframes(profileFor('bottom'), 420, 400, 400), {
+		0: {
+			opacity: '1',
+			transformOrigin: 'center bottom',
+			filter: 'blur(0px)',
+			height: '420px',
+			transform: 'translate3d(0px, 448px, 0px) scale(1)',
+		},
+		100: {
+			opacity: '1',
+			transformOrigin: 'center bottom',
+			filter: 'blur(0px)',
+			height: '420px',
+			transform: 'translate3d(0px, 0px, 0px) scale(1)',
+		},
+	});
+});
+
 test('every exit clears the screen by exactly one cushion, from rest and mid-drag', () => {
 	// The regression this pins is the one that shipped: a dismissal continuing a
 	// live drag reused the DRAG keyframes and sprang to their 0% frame, which is
@@ -1624,6 +1727,22 @@ test('exit travel is the runway left, floored at the extent still on screen', ()
 	assert.equal(exitTravel(fading, 400, 400), 400, 'from rest, the panel’s own extent');
 	assert.equal(exitTravel(fading, 200, 400), 200, 'mid-drag, the extent still showing');
 	assert.ok(exitTravel(fading, 200, 400) > EXIT_CUSHION, 'never just the cushion');
+});
+
+test('an inward overpull keeps the flush exit span and backdrop edge crossing', () => {
+	const profile = profileFor('right');
+	const flushTravel = exitTravel(profile, 400, 400);
+	const flushClear = exitClearProgress(profile, 400, 400);
+
+	assert.equal(flushTravel, 428);
+	assert.equal(exitTravel(profile, 420, 400), flushTravel);
+	assert.equal(flushClear, 7 / 107);
+	assert.equal(exitClearProgress(profile, 420, 400), flushClear);
+	assert.equal(
+		exitClearProgress(profile, 200, 400),
+		7 / 57,
+		'a non-overpulled drag keeps its existing edge crossing'
+	);
 });
 
 test('paintedExtent and awayTranslation split resizing from translating', () => {

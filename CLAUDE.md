@@ -359,6 +359,11 @@ live resting pose — identical to what is painted at the moment of release, so 
 `0%` is the effect's hidden pose. `dismiss()` therefore always starts at `p = 1` and has no branch
 left to disagree with itself.
 
+For a non-bottom profile that live pose is the **capped** one. `exitValues` once read the raw
+logical size instead: a right sheet at `restSize = 400`, overpulled to `size = 420`, was painted
+flush but built `100%` at `−20px`, so dismissal jumped **20px inward** before leaving. Applying the
+paint cap before deriving its displacement is the mirror of `returnToRest`'s cap-not-floor rule.
+
 The branch it replaced is the bug this whole section exists to prevent, reintroduced for the
 *common* case. A dismissal from rest built a real exit track and cleared correctly; a dismissal
 continuing a drag — which is every swipe-to-close — reused the **drag** keyframes and sprang to their
@@ -475,6 +480,11 @@ gesture it should have taken is recoverable, one that closes a confirm it should
 **Each route is blocked at its source, never by vetoing `beforeHide`.** That is the whole design
 constraint: by the time `beforeHide` fires, an Escape and a `[data-action-hide-dialog]` button are
 the same call, so a veto there would break the very buttons the feature exists to require.
+
+The one sanctioned exception is dialog-panel misreading a pointerless click's `(0,0)` coordinates
+as backdrop: `#outsideGuard` records its target only for that synchronous dispatch, so `beforeHide`
+regains exactly the missing bit and vetoes only a non-closing control inside this dialog. Escape,
+close buttons, real scrim taps, outside clicks, and programmatic hides therefore remain distinct.
 
 - **swipe** — checked where the release resolves. A refused dismissal is *redirected* to the active
   snap rather than blocked later, because `#dismiss()` routes through `panel.hide()`; refusing

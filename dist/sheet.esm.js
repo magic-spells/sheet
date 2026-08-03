@@ -927,7 +927,9 @@ function buildOpenKeyframes(profile, size, restSize, lowestSize = 0) {
 * @returns {Object} `{live, hidden, away, hiddenAway}`.
 */
 function exitValues(profile, size, restSize, lowestSize = 0, effect = profile.effect) {
-	const away = awayTranslation(profile, size, restSize, lowestSize);
+	const logicalProgress = size / restSize;
+	const painted = paintedProgress(profile.position, logicalProgress, "dragging");
+	const away = awayTranslation(profile, painted === logicalProgress ? size : painted * restSize, restSize, lowestSize);
 	const hidden = effectValues({
 		...profile,
 		effect
@@ -1597,6 +1599,7 @@ var SheetEngine = class extends EventEmitter {
 		_.#gestureExit = false;
 		_.#morphing = false;
 		_.#flightPhase = null;
+		_.#pendingDismissVelocity = 0;
 		_.#reversalTrack = false;
 		if (_.#state === "hidden") return;
 		if (_.#spring.isAnimating) _.#spring.stop();
@@ -2387,6 +2390,9 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 	#gestures = [];
 	#scrollVeto = null;
 	#scrimPress = false;
+	#pointerlessClick = null;
+	#pointerlessArmed = false;
+	#pointerlessTimer = null;
 	#connected = false;
 	#profile = null;
 	#snaps = [];
@@ -2429,6 +2435,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		const _ = this;
 		_.#handlers = {
 			beforeShow: (event) => {
+				if (event.target !== _.#panelRef) return;
 				if (window.innerWidth > _.maxDisplayWidth) {
 					event.preventDefault();
 					return;
@@ -2437,7 +2444,13 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 				if (_.#engine?.state !== "hiding") _.#setProgress(0);
 				_.#prepareOpen();
 			},
-			beforeHide: () => {
+			beforeHide: (event) => {
+				if (event.target !== _.#panelRef) return;
+				const source = _.#pointerlessArmed ? _.#pointerlessClick : null;
+				if (source && _.#dialogRef?.contains(source) && !source.closest?.("[data-action-hide-dialog]")) {
+					event.preventDefault();
+					return;
+				}
 				const interrupted = _.#drag.active ? _.#drag : null;
 				_.#drag = { active: false };
 				if (interrupted) queueMicrotask(() => {
@@ -2447,13 +2460,16 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 				});
 				_.#finishMorph();
 			},
-			shown: () => {
+			shown: (event) => {
+				if (event.target !== _.#panelRef) return;
 				_.#setProgress(1);
 				_.#flushPendingProfile();
 				_.#syncContentObserver();
 			},
-			hidden: () => {
+			hidden: (event) => {
+				if (event.target !== _.#panelRef) return;
 				_.#drag = { active: false };
+				_.#scrimPress = false;
 				_.#proxyRevealed = false;
 				_.#finishMorph();
 				_.#setProgress(0);
@@ -2467,11 +2483,29 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			scrimPress: (event) => {
 				_.#scrimPress = event.target === _.#dialogRef;
 			},
+			pointerlessArm: (event) => {
+				if (event.target === _.#pointerlessClick) _.#pointerlessArmed = true;
+			},
 			outsideGuard: (event) => {
-				if (!_.#dialogRef) return;
-				const rect = _.#dialogRef.getBoundingClientRect();
-				if (!(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) return;
-				if (!_.dismissPolicy.backdrop || !_.#scrimPress) event.stopPropagation();
+				try {
+					if (!_.#dialogRef) return;
+					if (event.detail === 0) {
+						_.#pointerlessClick = event.target;
+						_.#pointerlessArmed = false;
+						clearTimeout(_.#pointerlessTimer);
+						_.#pointerlessTimer = setTimeout(() => {
+							_.#pointerlessTimer = null;
+							_.#pointerlessClick = null;
+							_.#pointerlessArmed = false;
+						}, 0);
+						return;
+					}
+					const rect = _.#dialogRef.getBoundingClientRect();
+					if (!(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) return;
+					if (!_.dismissPolicy.backdrop || !_.#scrimPress) event.stopPropagation();
+				} finally {
+					_.#scrimPress = false;
+				}
 			},
 			close: () => {
 				const dialog = _.#dialogRef;
@@ -2546,6 +2580,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#panelRef.addEventListener("pointerdown", _.#handlers.scrimPress, true);
 			_.#panelRef.addEventListener("click", _.#handlers.outsideGuard, true);
 		}
+		_.addEventListener("click", _.#handlers.pointerlessArm);
 		_.#dialogRef?.addEventListener("close", _.#handlers.close);
 		document.addEventListener("cancel", _.#handlers.escapeGuard, true);
 		window.addEventListener("resize", _.#handlers.resize);
@@ -2573,7 +2608,12 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#contentObserver = null;
 		clearTimeout(_.#contentRemeasureTimer);
 		_.#contentRemeasureTimer = null;
+		clearTimeout(_.#pointerlessTimer);
+		_.#pointerlessTimer = null;
+		_.#pointerlessClick = null;
+		_.#pointerlessArmed = false;
 		_.#releaseMorphPins();
+		_.removeEventListener("click", _.#handlers.pointerlessArm);
 		_.#dialogRef?.removeEventListener("close", _.#handlers.close);
 		for (const gesture of _.#gestures) gesture.destroy();
 		_.#gestures = [];
@@ -3564,14 +3604,20 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		_.#morphInline = null;
 	}
 	/**
-	* Resolves the morph duration in milliseconds from the CSS token, so
-	* `prefers-reduced-motion` (which zeroes it) collapses the morph to an
-	* instant swap without a second switch in JS.
+	* Resolves the morph duration in milliseconds from the CSS token.
+	*
+	* The reduced-motion CSS declaration can lose the cascade to a later or
+	* more specific consumer token. Reading the preference here too prevents
+	* that override from restoring both the profile FLIP and trigger blob.
 	* @param {HTMLElement} dialog - Dialog carrying the token.
 	* @returns {number} Duration in milliseconds.
 	*/
 	#morphDuration(dialog) {
-		const match = getComputedStyle(dialog).getPropertyValue("--sheet-morph-duration").trim().match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
+		if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return 0;
+		const raw = getComputedStyle(dialog).getPropertyValue("--sheet-morph-duration").trim();
+		const zero = raw.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i);
+		if (zero && Number(zero[1]) === 0) return 0;
+		const match = raw.match(/^([+-]?(?:\d+|\d*\.\d+)(?:e[+-]?\d+)?)(ms|s)$/i);
 		if (!match) return 600;
 		const value = Number(match[1]);
 		if (!Number.isFinite(value)) return 600;
@@ -3587,5 +3633,3 @@ if (!customElements.get("sheet-content")) customElements.define("sheet-content",
 if (!customElements.get("sheet-footer")) customElements.define("sheet-footer", SheetFooter);
 //#endregion
 export { SheetContent, SheetFooter, SheetHeader, SheetPanel, resolveInitialSnap, resolveSnapPoints, resolveSnapTarget };
-
-//# sourceMappingURL=sheet.esm.js.map
