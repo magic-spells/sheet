@@ -1488,12 +1488,8 @@
 				</div>
 				<h2>Snap points make the sheet easy to resize.</h2>
 				<p class="demo-desc">
-					<code>snap-points="20vh 55vh 90vh"</code> gives the sheet several resting heights — any
-					CSS length, re-measured on resize. Drag between them from the header, the footer, or the
-					content once it hits its scroll top. A flick past <code>0.5 px/ms</code> steps exactly one
-					snap, a slow release lands on the nearest, and a downward flick from the lowest snap
-					dismisses. Snap points are a <strong>mobile-profile</strong> attribute: past
-					<code>breakpoint</code> the list is ignored and the panel carries a single resting size.
+					<code>snap-points="20vh 55vh 90vh"</code> gives the sheet several resting heights. Drag
+					between them, or flick to jump one.
 				</p>
 				<div class="stage stage-row">
 					<button class="btn" data-open="bottom-panel">20 · 55 · 90</button>
@@ -1521,10 +1517,8 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>Close a side panel with a swipe.</h2>
 				<p class="demo-desc">
-					<code>position="left"</code> or <code>position="right"</code> turns the drag horizontal
-					and dismisses toward the edge the sheet came from. A side sheet has one fixed width — the
-					<code>--sheet-active-size</code> token — and ignores <code>snap-points</code>. Both demos
-					pin the mobile profile with <code>breakpoint="9999"</code> so you can try them here.
+					<code>position="left"</code> or <code>"right"</code> turns the drag horizontal. One fixed
+					width, and a swipe toward its own edge closes it.
 				</p>
 				<div class="stage controls">
 					<button class="btn" data-open="left-panel">Open settings</button>
@@ -1549,10 +1543,8 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>Attached to the edge, or a floating card.</h2>
 				<p class="demo-desc">
-					<code>mode="card"</code> is the same bottom sheet, inset by
-					<code>--sheet-card-margin</code> on the left, right and bottom, with all four corners
-					rounded. Edge mode matches the platform's own sheets; the card reads as a floating object
-					instead. Both buttons open the same queue — same snaps, same gestures, different geometry.
+					<code>mode="card"</code> insets the same sheet from every edge and rounds all four
+					corners. Same snaps, same gestures — it just floats.
 				</p>
 				<div class="stage controls">
 					<button class="btn" data-open="edge-compare-panel">Edge</button>
@@ -1585,10 +1577,8 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>A bottom sheet on a phone. Something else entirely on a desktop.</h2>
 				<p class="demo-desc">
-					Below <code>breakpoint</code> (768px), mobile <code>position</code>, <code>mode</code>,
-					and <code>effect</code> apply — at or above it, their <code>desktop-*</code> twins take
-					over. Resize while a sheet is open and it morphs in place, with no reopen and no lost
-					focus.
+					Below <code>breakpoint</code> the mobile attributes apply; above it, their
+					<code>desktop-*</code> twins. Resize the window while one is open and it morphs in place.
 				</p>
 				<div class="profile-list">
 					<button class="profile-row" data-open="quickshop-panel" aria-label="Quick shop">
@@ -1658,9 +1648,8 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>Or decline to appear at all.</h2>
 				<p class="demo-desc">
-					Above the width you name, <code>show()</code> simply declines, and a sheet already open
-					hides rather than morphing. Use it when the right answer on a wide screen is a different
-					component, not a different profile.
+					Past <code>max-display-width</code> the sheet refuses to open, and an open one hides. For
+					when a wide screen wants a different component entirely.
 				</p>
 				<div class="stage stage-row">
 					<button class="btn" data-open="limited-panel">Open below 900px</button>
@@ -1679,10 +1668,8 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>Three ways to animate in.</h2>
 				<p class="demo-desc">
-					An effect is how the sheet arrives. <code>slide</code> travels in from its edge,
-					<code>slide-fade</code> fades across a short <code>24px</code> slide, and
-					<code>fade-scale</code> fades up in place. The three cards below are identical apart from
-					the attribute.
+					<code>slide</code> travels in from the edge, <code>slide-fade</code> fades across a short
+					slide, and <code>fade-scale</code> fades up in place.
 				</p>
 				<div class="stage controls">
 					<button class="btn" data-open="effect-slide-panel">slide</button>
@@ -1706,20 +1693,16 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>How a sheet leaves.</h2>
 				<p class="demo-desc">
-					A dismissal starts wherever your finger let go, and it always clears the screen fully —
-					the panel's own size, plus any gap it floats by, plus a shadow cushion
-					(<code>--sheet-exit-cushion</code>). <code>exit-effect</code> lets leaving differ from
-					arriving: drag the second card down and it keeps going the way your finger was moving,
-					then shrinks away.
+					<code>exit-effect</code> lets leaving differ from arriving. Drag either card down and it
+					keeps going the way your finger was moving.
 				</p>
 				<div class="stage controls">
 					<button class="btn" data-open="exit-slide-panel">Swipe down · slide out</button>
 					<button class="btn" data-open="exit-shrink-panel">Swipe down · shrink out</button>
 				</div>
 				<p class="demo-desc">
-					And sometimes a sheet must not be waved away. <code>dismiss="none"</code> closes the
-					swipe, backdrop and Escape routes but keeps the buttons working — the panel still tracks
-					your finger, springs back, and reports each refusal through <code>snaprelease</code>.
+					Sometimes a sheet must not be waved away. <code>dismiss="none"</code> closes the swipe,
+					backdrop and Escape routes — the buttons still work.
 				</p>
 				<div class="stage controls">
 					<button class="btn" data-open="locked-panel">Open the locked confirm</button>
@@ -1746,10 +1729,8 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>The bar stays put while the list moves.</h2>
 				<p class="demo-desc">
-					Add <code>&lt;sheet-footer&gt;</code> and the sheet becomes a three-part column: header
-					and footer hold still, only the content between them scrolls. The footer takes over the
-					safe-area padding so its background runs to the bottom of the screen, and it is a drag
-					surface on the same terms as the header.
+					Add <code>&lt;sheet-footer&gt;</code> and the header and footer hold still while the
+					content scrolls between them.
 				</p>
 				<div class="stage controls">
 					<button class="btn" data-open="footer-panel">Open the bag</button>
@@ -1777,10 +1758,10 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 				</div>
 				<h2>Bind to events using the API.</h2>
 				<p class="demo-desc">
-					Four lifecycle events come from the parent <code>&lt;dialog-panel&gt;</code>;
-					<code>snapchange</code> and <code>snaprelease</code> come from the sheet. All six bubble,
-					so one listener sees the whole cycle, and <code>snapchange</code> fires on commit — never
-					mid-drag. The log below is wired to every panel on this page.
+					Six events, all bubbling — four lifecycle events from
+					<code>&lt;dialog-panel&gt;</code>, plus <code>snapchange</code> and
+					<code>snaprelease</code> from the sheet. The log below is wired to every panel on this
+					page.
 				</p>
 				<div class="stage">
 					<div class="controls">
@@ -2305,9 +2286,8 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 				</div>
 				<h2>Fourteen attributes and twenty-six dials.</h2>
 				<p class="demo-desc">
-					Five elements, fourteen attributes, twenty-six style tokens, three methods, and six
-					events. Everything else is ordinary HTML you write yourself, inside a real native
-					<code>&lt;dialog&gt;</code>.
+					Five elements, fourteen attributes, twenty-six style tokens, three methods, six events.
+					Everything else is HTML you write yourself.
 				</p>
 				<div class="stage controls">
 					<button class="btn" data-open="api-panel">Open the reference sheet</button>
@@ -3472,7 +3452,7 @@ sheet.hide();</pre>
 
 		<dialog-panel id="effect-fade-scale-panel">
 			<dialog aria-labelledby="effect-fade-scale-title">
-				<sheet-panel mode="card" effect="fade-scale" breakpoint="9999" snap-points="46vh">
+				<sheet-panel position="center" effect="fade-scale" breakpoint="9999">
 					<sheet-header>
 						<div class="sheet-header">
 							<h3 id="effect-fade-scale-title">
@@ -3486,7 +3466,7 @@ sheet.hide();</pre>
 						<div class="sheet-copy">
 							<p>
 								Opacity from <code>0</code>, scale from <code>0.95</code>, no translation at all.
-								The card appears where it belongs rather than travelling to get there.
+								It appears where it belongs rather than travelling to get there.
 							</p>
 							<p>
 								A centred dialog uses this by default. Anything else inherits
@@ -3500,7 +3480,7 @@ sheet.hide();</pre>
 
 		<dialog-panel id="effect-slide-fade-panel">
 			<dialog aria-labelledby="effect-slide-fade-title">
-				<sheet-panel mode="card" effect="slide-fade" breakpoint="9999" snap-points="46vh">
+				<sheet-panel position="center" effect="slide-fade" breakpoint="9999">
 					<sheet-header>
 						<div class="sheet-header">
 							<h3 id="effect-slide-fade-title">
@@ -3513,8 +3493,8 @@ sheet.hide();</pre>
 					<sheet-content>
 						<div class="sheet-copy">
 							<p>
-								<code>24px</code> of edge-directed travel while the opacity comes up. Just enough
-								motion to say which direction the sheet belongs to.
+								<code>24px</code> of travel while the opacity comes up — along whichever axis the
+								sheet dismisses on. Just enough motion to feel like it arrived.
 							</p>
 							<p>The most restrained of the three, and the easiest to repeat often.</p>
 						</div>
