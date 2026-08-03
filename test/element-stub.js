@@ -65,6 +65,9 @@ class StubElement {
 
 	fire(type, init = {}) {
 		const event = {
+			// A real event always carries its own type, and a handler that switches on
+			// it silently took the wrong branch while this was missing.
+			type,
 			isPrimary: true,
 			pointerId: 1,
 			clientX: 0,
