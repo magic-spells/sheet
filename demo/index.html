@@ -625,16 +625,6 @@
 				white-space: pre-line;
 			}
 
-			.flick-sheet-readout {
-				display: block;
-				min-width: 0;
-				margin: 1rem 0;
-				padding: 0.9rem 1rem;
-				background: rgba(255, 255, 255, 0.035);
-				border: 1px solid var(--border-accent);
-				border-radius: 10px;
-			}
-
 			/* ---- Profile cards ----
 			   A button in the breakpoint section opens one of two different sheets
 			   depending on the viewport, which a label alone cannot say. Each is
@@ -1476,39 +1466,13 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 });</pre>
 			</section>
 
-			<!-- ---- 01b · Flick lab ---- -->
-			<section class="demo-section">
-				<div class="spec">
-					<span class="spec-key">Flick lab</span>
-					<span class="spec-rule" aria-hidden="true"></span>
-				</div>
-				<h2>Throw it from wherever your thumb leaves it.</h2>
-				<p class="demo-desc">
-					This one opens at <code>20vh</code>. Drag it near the top, then flick up: the target is
-					chosen from the live size at release, not the snap where the drag began — so an up-flick
-					near full height keeps going up. The readout reports each release's velocity, size, and
-					where it resolved.
-				</p>
-				<div class="stage stage-row">
-					<button class="btn" data-open="flick-panel">Open the flick lab</button>
-					<output class="readout" id="flick-readout" aria-live="polite"
-						>No release measured yet…</output
-					>
-				</div>
-				<pre
-					class="code-block">&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">snap-points</span>=<span class="hl-val">"20vh 55vh 90vh"</span> <span class="hl-attr">initial-snap</span>=<span class="hl-val">"0"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
-
-<span class="hl-cm">// A flick steps one snap from where your thumb is, not from where the drag began.</span>
-<span class="hl-cm">// Drag 20vh → ~88vh and flick up: snap 2 · 90vh, never back down to snap 1 · 55vh.</span></pre>
-			</section>
-
 			<!-- ---- 02 · Side sheets ---- -->
 			<section class="demo-section">
 				<div class="spec">
 					<span class="spec-key">Edges</span>
 					<span class="spec-rule" aria-hidden="true"></span>
 				</div>
-				<h2>The same gesture, turned ninety degrees.</h2>
+				<h2>Close a side panel with a swipe.</h2>
 				<p class="demo-desc">
 					<code>position="left"</code> or <code>position="right"</code> turns the drag horizontal
 					and dismisses toward the edge the sheet came from. A side sheet has one fixed width — the
@@ -1536,7 +1500,7 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 					<span class="spec-key">Card</span>
 					<span class="spec-rule" aria-hidden="true"></span>
 				</div>
-				<h2>Detach it, and the corners stop clashing.</h2>
+				<h2>Attached to the edge, or a floating card.</h2>
 				<p class="demo-desc">
 					<code>mode="card"</code> is the same bottom sheet, inset by
 					<code>--sheet-card-margin</code> on the left, right and bottom, with all four corners
@@ -3082,43 +3046,6 @@ sheet.hide();</pre>
 			</dialog>
 		</dialog-panel>
 
-		<!-- 01b · flick lab — starts low so a drag can cross both higher snaps -->
-		<dialog-panel id="flick-panel">
-			<dialog aria-labelledby="flick-title">
-				<sheet-panel snap-points="20vh 55vh 90vh" initial-snap="0" breakpoint="9999">
-					<sheet-header>
-						<div class="sheet-header">
-							<h3 id="flick-title">
-								<span class="sheet-eyebrow">20vh · 55vh · 90vh</span>
-								Flick lab
-							</h3>
-							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
-						</div>
-					</sheet-header>
-					<sheet-content>
-						<div class="sheet-copy">
-							<output
-								class="readout flick-sheet-readout"
-								id="flick-sheet-readout"
-								aria-live="polite"
-								>Drag, release, and this will report the exact decision…</output
-							>
-							<p>
-								Start at the peek, pull this panel near full height, then flick up. The live
-								position should resolve to <code>snap 2 · 90vh</code>, never back down to
-								<code>snap 1 · 55vh</code>.
-							</p>
-							<div class="controls snap-controls">
-								<button class="btn" data-snap="0">20vh</button>
-								<button class="btn" data-snap="1">55vh</button>
-								<button class="btn" data-snap="2">90vh</button>
-							</div>
-						</div>
-					</sheet-content>
-				</sheet-panel>
-			</dialog>
-		</dialog-panel>
-
 		<!-- 02a · left sheet — settings -->
 		<dialog-panel id="left-panel">
 			<dialog aria-labelledby="left-title">
@@ -4000,30 +3927,6 @@ sheet.hide();</pre>
 
 			snapPanel.addEventListener('hidden', () => {
 				snapReadout.textContent = 'dismissed · flicked below the peek';
-			});
-
-			// ---- Flick lab readout ----
-			// snaprelease carries the same live size, measured velocity, and
-			// resolver target the component used for the actual settle.
-			const flickSheet = $('#flick-panel sheet-panel');
-			const flickReadouts = [$('#flick-readout'), $('#flick-sheet-readout')];
-			const FLICK_SNAP_LABELS = ['20vh', '55vh', '90vh'];
-
-			flickSheet.addEventListener('snaprelease', ({ detail }) => {
-				const physicalDirection =
-					detail.direction === 'away' ? 'down' : detail.direction === 'toward' ? 'up' : 'still';
-				const threshold = detail.flick
-					? `flick · ${physicalDirection}`
-					: `below 0.5 · ${physicalDirection}`;
-				const resolved =
-					detail.target === null
-						? 'dismiss'
-						: `snap ${detail.target} · ${FLICK_SNAP_LABELS[detail.target]}`;
-				const sign = detail.velocity > 0 ? '+' : '';
-				const message =
-					`velocity ${sign}${detail.velocity.toFixed(3)} px/ms · ${threshold}\n` +
-					`release ${Math.round(detail.size)}px · ${resolved}`;
-				for (const readout of flickReadouts) readout.textContent = message;
 			});
 
 			// ---- Locked-sheet readout ----

@@ -235,7 +235,29 @@ class SheetPanel extends HTMLElement {
 			beforeHide: () => {
 				// Covers every route out: gesture dismissal, close button,
 				// Escape, backdrop click, or a programmatic hide().
+				const interrupted = _.#drag.active ? _.#drag : null;
 				_.#drag = { active: false };
+				// ...but beforeHide is cancelable, and a vetoed hide leaves the panel
+				// open with the finger still down. #dismiss() repairs its own route by
+				// reading panel.hide()'s false; every OTHER route — a router guard, an
+				// inactivity timeout, a bare panel.hide() — had nothing to repair it,
+				// so #dragMove and #dragEnd early-returned on !active and the release
+				// ran no settle at all. The panel stayed frozen at its dragged,
+				// half-faded pose until the user happened to start a fresh drag.
+				//
+				// The veto result cannot be read from inside the emit, and dialog-panel
+				// publishes no post-veto event to wait for, so the check is deferred by
+				// a microtask: if the engine never left for the exit, the hide was
+				// refused and the gesture is handed back. #dismiss()'s own repair still
+				// runs first and lands the panel, which is why this only restores the
+				// drag when the engine is genuinely still shown.
+				if (interrupted) {
+					queueMicrotask(() => {
+						if (!_.#connected || _.#engine?.state !== 'shown') return;
+						if (_.#drag.active) return;
+						_.#drag = interrupted;
+					});
+				}
 				// A morph still in flight has to be abandoned here too, or its
 				// pinned box would outlive the panel and fight the exit animation
 				// the engine is about to run.
@@ -1018,14 +1040,29 @@ class SheetPanel extends HTMLElement {
 		// Blocking it downstream — in beforeHide, say — would leave the panel parked
 		// at its dragged pose with no settle at all, because #dismiss() has already
 		// gone through panel.hide() by then.
-		const prevented = resolved === null && !_.dismissPolicy.swipe;
-		const target = prevented ? _.#engine.activeSnap : resolved;
-		_.#emitSnapRelease(velocityAway, target, prevented);
+		let prevented = resolved === null && !_.dismissPolicy.swipe;
+		let target = prevented ? _.#engine.activeSnap : resolved;
 
 		if (target === null) {
-			_.#dismiss(Math.max(velocityAway, 0));
+			// The OTHER way a resolved dismissal fails to happen: a consumer vetoes
+			// beforeHide. #dismiss already redirects the panel to a settle-back, so
+			// the event has to report the snap it actually landed on — exactly as a
+			// refused swipe does one branch up. That is only knowable after the hide
+			// has been attempted, which is why this emit waits for it rather than
+			// firing alongside the other branch.
+			//
+			// Emitting first was the bug: a consumer listening for `target === null`
+			// to tear down — clearing a draft, releasing a camera stream, logging a
+			// dismissal — did all of it while the sheet stayed open and interactive.
+			if (_.#dismiss(Math.max(velocityAway, 0)) === false) {
+				target = _.#engine.activeSnap;
+				prevented = true;
+			}
+			_.#emitSnapRelease(velocityAway, target, prevented);
 			return;
 		}
+		_.#emitSnapRelease(velocityAway, target, prevented);
+
 		if (_.#profile.position === 'bottom') {
 			_.#engine.settleTo(target, -velocityAway);
 		} else {
@@ -1096,6 +1133,11 @@ class SheetPanel extends HTMLElement {
 		_.#engine.dragBy(activeSize - size);
 	}
 
+	/**
+	 * @param {number} velocityAway - Release velocity toward the dismiss edge.
+	 * @returns {boolean} False when a consumer vetoed `beforeHide`, so the caller
+	 *   can report the snap the panel actually landed on.
+	 */
 	#dismiss(velocityAway) {
 		const _ = this;
 		_.#engine.setDismissVelocity(Math.max(0, velocityAway));
@@ -1112,7 +1154,9 @@ class SheetPanel extends HTMLElement {
 			_.#engine.cancelGestureExit();
 			_.#engine.setDismissVelocity(0);
 			_.#settleBack();
+			return false;
 		}
+		return true;
 	}
 
 	/**

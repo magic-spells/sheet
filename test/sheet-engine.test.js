@@ -3006,3 +3006,50 @@ test('a dismissal continuing a deep drag cannot outrun the spring receiving it',
 		`a flick still leaves sooner than a standing release, got ${still.visible} vs ${gentle.visible}`
 	);
 });
+
+test('a resize landing inside a hide→show reversal retargets it instead of restarting it', async (t) => {
+	// The reversal runs on a two-frame track whose 0% is the half-dismissed pose
+	// ON SCREEN. #rebuildOpenTrack was the one writer that assumed the entrance
+	// parameterisation, so setProfile/setSnaps arriving mid-reversal — a throttled
+	// resize, a URL-bar collapse, an effect attribute change — swapped in a track
+	// whose 0% is fully off-screen and repainted at the same #p.
+	const frames = captureFrames(t);
+	const engine = new SheetEngine();
+	const dialog = makeDialog();
+	engine.setProfile(profileFor('bottom'));
+	engine.setSnaps([200, 500], 1);
+	const show = engine.show({ to: dialog });
+	drainFrames(frames);
+	await show;
+
+	// Start closing, get part way, then reopen: that installs the reversal track.
+	void engine.hide();
+	for (let index = 0; index < 4; index++) frames.shift()(index * 16.66);
+	const exitPose = dialog.style.transform;
+	void engine.show({ to: dialog });
+	for (let index = 0; index < 3; index++) frames.shift()(index * 16.66);
+
+	const beforeResize = Number.parseFloat(dialog.style.height);
+	assert.ok(beforeResize > 0, `the reversal is painting (${beforeResize})`);
+
+	// A same-profile resize mid-reversal. Only the destination may move.
+	engine.setSnaps([200, 480], 1);
+	const afterResize = Number.parseFloat(dialog.style.height);
+
+	// The bug was a teleport, so the assertion is continuity across the rebuild
+	// rather than any particular measured pose: one throttled resize tick must not
+	// move the panel further than the reversal itself covers in a frame. The
+	// entrance track's 0% is fully off-screen, so reinterpreting #p against it
+	// jumped the panel by most of its height.
+	assert.ok(
+		Math.abs(afterResize - beforeResize) < 20,
+		`the rebuild is continuous, ${beforeResize} -> ${afterResize}`
+	);
+
+	// And the run still completes into the NEW geometry rather than the old one.
+	drainFrames(frames);
+	assert.equal(engine.state, 'shown');
+	assert.equal(engine.currentSize, 480, 'the reversal lands on the resized snap');
+	assert.notEqual(exitPose, undefined);
+	engine.destroy();
+});

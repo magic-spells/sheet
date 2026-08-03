@@ -1047,6 +1047,9 @@ class SheetEngine extends EventEmitter {
 	#savedInline = null;
 	#backdropProgress = 0;
 	#flightPhase = null;
+	// True only while #frames holds the two-frame hide→show reversal track, whose
+	// 0% is a pose on screen rather than an effect's hidden frame.
+	#reversalTrack = false;
 	#flightBackdrop = 0;
 	#springOverride = null;
 	#morphing = false;
@@ -1188,7 +1191,30 @@ class SheetEngine extends EventEmitter {
 		if (!_.#dialog || _.#parked()) return;
 		if (_.#state !== 'shown' && _.#state !== 'showing') return;
 		if (_.#state === 'shown') _.#p = 1;
-		_.#frames = _.#makeOpenFrames(_.#currentSize);
+		const open = _.#makeOpenFrames(_.#currentSize);
+
+		// A hide→show reversal is running on a two-frame track whose 0% is the
+		// half-dismissed pose ON SCREEN, not an entrance's off-screen hidden frame.
+		// Swapping the full entrance track in underneath it and repainting at the
+		// same #p reinterprets that number against completely different geometry:
+		// a bottom sheet caught at #p ≈ 0.15 jumped from mid-screen back to nearly
+		// off-screen and re-entered, while the scrim stayed dark because the
+		// settle action's floors still described the pre-jump run.
+		//
+		// Only the DESTINATION is rebased, never the 0% frame or #p. The spring is
+		// mid-run and #p is derived from its position, so re-parameterising here
+		// would be overwritten by the next frame anyway; keeping 0% as the pose the
+		// run actually started from leaves #p meaning exactly what it did and lets
+		// the same spring finish into the new profile's rest frame. This is the
+		// retarget every other track-replacing site already performs — show() and
+		// hide() both read the painted frame before replacing — and #rebuildOpenTrack
+		// was the one writer that assumed the entrance parameterisation.
+		if (_.#reversalTrack && _.#frames) {
+			_.#frames = new FrameEngine({ 0: _.#frames.getFrame(0), 100: open.getFrame(1) });
+			_.#applyFrame(_.#p);
+			return;
+		}
+		_.#frames = open;
 		_.#applyFrame(_.#p);
 	}
 
@@ -1428,6 +1454,10 @@ class SheetEngine extends EventEmitter {
 			// the entrance parameterisation because an exit effect need not translate
 			// at all.
 			_.#frames = painted ? new FrameEngine({ 0: painted, 100: open.getFrame(1) }) : open;
+			// #rebuildOpenTrack has to know this track is not the entrance
+			// parameterisation, or a resize landing inside the reversal repaints it
+			// as one. See there.
+			_.#reversalTrack = !!painted;
 			_.#p = 0;
 			_.#settleAction = {
 				type: 'shown',
@@ -1703,6 +1733,11 @@ class SheetEngine extends EventEmitter {
 		// Math.max, so a reopened sheet pops to the scrim it was stopped under.
 		_.#morphing = false;
 		_.#flightPhase = null;
+		// Same argument, third flag: a force-close landing inside a hide→show
+		// reversal leaves #reversalTrack set with the track itself discarded, and
+		// the next #rebuildOpenTrack would then rebase a frame from whatever
+		// #frames had become.
+		_.#reversalTrack = false;
 		if (_.#state === 'hidden') return;
 		if (_.#spring.isAnimating) _.#spring.stop();
 		_.#state = 'hidden';
@@ -1806,6 +1841,10 @@ class SheetEngine extends EventEmitter {
 		const action = _.#settleAction;
 		if (!action) return;
 		_.#settleAction = null;
+		// The reversal track is consumed by the run that installed it; every settle
+		// re-establishes an ordinary one, so a stale flag could only mislead a later
+		// #rebuildOpenTrack.
+		_.#reversalTrack = false;
 
 		if (action.type === 'shown') {
 			_.#state = 'shown';

@@ -118,6 +118,15 @@ The inner engine's `stop` event is deliberately swallowed. `#releaseBlob()` uses
 
 Stopping the blob restores the inline snapshot it took before the flight, which also erases the live drag pose SheetEngine painted after the panel landed. `#releaseBlob()` must therefore call `#applyFrame(#p)` in the **same task** as `blob.stop()`. Waiting for the first spring frame leaves one paint opportunity in which the blob is gone, the trigger is visible again, and the dialog has snapped back to rest before continuing its exit from the finger's release point.
 
+**Known gap, deliberately not fixed for 0.1.0:** that turn-around is always bound to the trigger the
+run was armed with. `armMorph` refuses outside `hidden` and leaves `#morphTrigger` in place, so
+`show(B)` landing during a reverse flight armed to A reopens with B's content but morphs back into
+A's box and returns focus to A. It is not the ten-line downgrade it looks like — `animatesDialog`
+keys off `#morphTrigger` itself, so the panel cannot force the direct transport without clearing it
+mid-flight, and `disarmMorph` refuses that *by design* so a live reversal is never stripped. The real
+fixes are releasing the blob and re-classifying at the seam, or retargeting the blob in MorphEngine;
+both change the one classification point described above and want their own pass.
+
 Calling `show()` while a reverse blob flight is running turns the existing MorphEngine run around; it never builds a second blob or a second set of keyframes. In that direction the dialog is the run's source, and MorphEngine has no source-side `reveal` event, so SheetEngine re-emits `reveal { to: dialog }` synchronously before asking the blob to reverse. Without it dialog-panel would keep the native dialog demoted until `shown`, then promote a fully visible settled surface in one repaint.
 
 Focus timing follows the transport boundary. A direct spring promotes at entrance-start, so focus and `autofocus` enter then. A trigger morph keeps the real dialog out of the top layer while the blob establishes the geometry and moves focus only when the forwarded `reveal` promotes it. Moving focus earlier would target a dialog that is deliberately still invisible; moving it to settle would recreate the visible promotion repaint the reveal seam exists to avoid.
@@ -844,6 +853,25 @@ further callbacks.
 Dismissal always enters through `panel.hide()` so cancelable `beforeHide`, focus restoration, Escape handling, and native dialog cleanup stay centralized. Gesture velocity is queued on SheetEngine before delegation.
 
 Every claimed touch release emits `snaprelease` with `{ velocity, flick, direction, size, target, prevented }` through `#emitSnapRelease()`. `target` reports the snap actually taken, never merely the one resolved — so a dismissal `dismiss` refused reports the active snap with `prevented: true`. The touch path runs `resolveSnapTarget()` and reports its index.
+
+**There are TWO ways a resolved dismissal fails to happen, and both must report the same way.**
+`dismiss` refusing a swipe is answered before `panel.hide()`; a consumer vetoing `beforeHide` is only
+answerable after it, because the veto result is `panel.hide()`'s return value. The dismissal branch
+therefore emits *after* `#dismiss()` rather than alongside the other branch — `#dismiss()` returns
+`false` on a veto, and the emit then reports the active snap with `prevented: true`, exactly as the
+refused swipe does. Emitting first was the bug: a consumer keying teardown off `target === null`
+cleared its draft, released its camera and logged a dismissal while the sheet stayed open and fully
+interactive.
+
+**A vetoed hide also has to hand back a live gesture.** `beforeHide` clears `#drag` for every route
+out, but it is cancelable, and only `#dismiss()` repairs its own route by reading that `false`. Every
+other route — a router guard, an inactivity timeout, a bare `panel.hide()` — left `#dragMove` and
+`#dragEnd` early-returning on `!active`, so the release ran no settle and the panel stayed frozen at
+its dragged, half-faded pose until the user started a fresh drag. The veto cannot be read from inside
+the emit and dialog-panel publishes no post-veto event (it emits only `beforeShow`, `shown`,
+`beforeHide`, `hidden`), so the handler snapshots the live drag and re-checks on a **microtask**: if
+the engine never left for the exit, the gesture is restored. `#dismiss()`'s own repair still runs
+first, which is why the restore only applies while the engine is genuinely still `shown`.
 
 ## Breakpoint and Snap Policy
 

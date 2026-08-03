@@ -1494,3 +1494,82 @@ elementTest('dismiss="none" still refuses a scrim tap it would otherwise allow',
 	assert.equal(sheet.dismissPolicy.backdrop, false);
 	assert.equal(scrimGesture(panel, dialog, { clientX: 200, clientY: -80 }), true);
 });
+
+elementTest('a dismissal vetoed at beforeHide reports the snap it actually landed on', (t) => {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	const { engine, panel, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('snap-points', '200px 500px');
+	sheet.show();
+	drainFrames(frames);
+
+	// A consumer with an unsaved-changes guard: beforeHide is cancelable, and
+	// dialog-panel returns false without ever calling engine.hide().
+	panel.hide = () => false;
+	const releases = () =>
+		sheet.dispatchedEvents.filter((event) => event.type === 'snaprelease').map((e) => e.detail);
+
+	// Swipe down hard enough to resolve to a dismissal.
+	sheet.fire('pointerdown', pointer());
+	sheet.fire('pointermove', pointer({ clientY: 600, timeStamp: 40 }));
+	sheet.fire('pointerup', pointer({ clientY: 600, timeStamp: 50 }));
+	drainFrames(frames);
+
+	// Emitting before the hide was attempted was the bug: a consumer keying
+	// teardown off `target === null` cleared its draft, released its camera and
+	// logged a dismissal while the sheet stayed open and fully interactive. The
+	// refused-`dismiss` path already reported the truth; the veto is the other
+	// way a resolved dismissal fails to happen and it reported the opposite.
+	const detail = releases();
+	assert.equal(detail.length, 1);
+	assert.notEqual(detail[0].target, null, 'never reports a dismissal that did not happen');
+	assert.equal(detail[0].target, engine.activeSnap);
+	assert.equal(detail[0].prevented, true);
+	assert.equal(panel.isOpen, true, 'and the sheet is still open, which is the point');
+});
+
+elementTest('a hide vetoed mid-drag hands the gesture back instead of freezing it', async (t) => {
+	const frames = captureFrames(t);
+	const result = makeSheet();
+	const { engine, panel, sheet } = result;
+	wirePanelTransport(result);
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('snap-points', '200px 500px');
+	sheet.show();
+	drainFrames(frames);
+
+	// Mid-drag, finger still down.
+	sheet.fire('pointerdown', pointer());
+	sheet.fire('pointermove', pointer({ clientY: 120, timeStamp: 40 }));
+	const draggedSize = engine.currentSize;
+	assert.ok(draggedSize < 500, `the drag is live (${draggedSize})`);
+
+	// A programmatic hide from somewhere else entirely — a router guard, an
+	// inactivity timeout, a close-all-overlays call — that a consumer then
+	// vetoes. #dismiss() repairs only its OWN route, so before this fix nothing
+	// restored the gesture: #dragMove and #dragEnd both early-return on
+	// !active, so the release ran no settle and the panel stayed frozen at its
+	// dragged, half-faded pose.
+	panel.hide = () => {
+		panel.fire('beforeHide');
+		return false;
+	};
+	sheet.hide();
+	await Promise.resolve();
+
+	// The finger is still down and still moving, so the panel must still follow.
+	sheet.fire('pointermove', pointer({ clientY: 200, timeStamp: 80 }));
+	assert.ok(
+		engine.currentSize < draggedSize,
+		`the panel still tracks the finger, got ${engine.currentSize} vs ${draggedSize}`
+	);
+
+	// And the release must actually land somewhere rather than stranding it.
+	sheet.fire('pointerup', pointer({ clientY: 200, timeStamp: 90 }));
+	drainFrames(frames);
+	assert.equal(engine.activeSnap, 0, 'the release settles onto a real snap');
+	assert.equal(engine.currentSize, 200, 'and lands on it rather than freezing mid-drag');
+	assert.equal(panel.isOpen, true, 'with the sheet still open, since the hide was refused');
+});

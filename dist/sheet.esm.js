@@ -1101,6 +1101,7 @@ var SheetEngine = class extends EventEmitter {
 	#savedInline = null;
 	#backdropProgress = 0;
 	#flightPhase = null;
+	#reversalTrack = false;
 	#flightBackdrop = 0;
 	#springOverride = null;
 	#morphing = false;
@@ -1225,7 +1226,16 @@ var SheetEngine = class extends EventEmitter {
 		if (!_.#dialog || _.#parked()) return;
 		if (_.#state !== "shown" && _.#state !== "showing") return;
 		if (_.#state === "shown") _.#p = 1;
-		_.#frames = _.#makeOpenFrames(_.#currentSize);
+		const open = _.#makeOpenFrames(_.#currentSize);
+		if (_.#reversalTrack && _.#frames) {
+			_.#frames = new FrameEngine({
+				0: _.#frames.getFrame(0),
+				100: open.getFrame(1)
+			});
+			_.#applyFrame(_.#p);
+			return;
+		}
+		_.#frames = open;
 		_.#applyFrame(_.#p);
 	}
 	/** @returns {boolean} True while a host-driven profile morph owns the dialog. */
@@ -1404,6 +1414,7 @@ var SheetEngine = class extends EventEmitter {
 				0: painted,
 				100: open.getFrame(1)
 			}) : open;
+			_.#reversalTrack = !!painted;
 			_.#p = 0;
 			_.#settleAction = {
 				type: "shown",
@@ -1586,6 +1597,7 @@ var SheetEngine = class extends EventEmitter {
 		_.#gestureExit = false;
 		_.#morphing = false;
 		_.#flightPhase = null;
+		_.#reversalTrack = false;
 		if (_.#state === "hidden") return;
 		if (_.#spring.isAnimating) _.#spring.stop();
 		_.#state = "hidden";
@@ -1664,6 +1676,7 @@ var SheetEngine = class extends EventEmitter {
 		const action = _.#settleAction;
 		if (!action) return;
 		_.#settleAction = null;
+		_.#reversalTrack = false;
 		if (action.type === "shown") {
 			_.#state = "shown";
 			_.#phase = "shown";
@@ -2425,7 +2438,13 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 				_.#prepareOpen();
 			},
 			beforeHide: () => {
+				const interrupted = _.#drag.active ? _.#drag : null;
 				_.#drag = { active: false };
+				if (interrupted) queueMicrotask(() => {
+					if (!_.#connected || _.#engine?.state !== "shown") return;
+					if (_.#drag.active) return;
+					_.#drag = interrupted;
+				});
 				_.#finishMorph();
 			},
 			shown: () => {
@@ -2953,13 +2972,17 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			snaps: _.#snaps,
 			flickVelocity: FLICK_VELOCITY
 		});
-		const prevented = resolved === null && !_.dismissPolicy.swipe;
-		const target = prevented ? _.#engine.activeSnap : resolved;
-		_.#emitSnapRelease(velocityAway, target, prevented);
+		let prevented = resolved === null && !_.dismissPolicy.swipe;
+		let target = prevented ? _.#engine.activeSnap : resolved;
 		if (target === null) {
-			_.#dismiss(Math.max(velocityAway, 0));
+			if (_.#dismiss(Math.max(velocityAway, 0)) === false) {
+				target = _.#engine.activeSnap;
+				prevented = true;
+			}
+			_.#emitSnapRelease(velocityAway, target, prevented);
 			return;
 		}
+		_.#emitSnapRelease(velocityAway, target, prevented);
 		if (_.#profile.position === "bottom") _.#engine.settleTo(target, -velocityAway);
 		else _.#engine.returnToRest(-velocityAway);
 	}
@@ -3005,6 +3028,11 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 		if (size < 0) size = -Math.sqrt(-size) * 10 * OVERSCROLL_RESISTANCE;
 		_.#engine.dragBy(activeSize - size);
 	}
+	/**
+	* @param {number} velocityAway - Release velocity toward the dismiss edge.
+	* @returns {boolean} False when a consumer vetoed `beforeHide`, so the caller
+	*   can report the snap the panel actually landed on.
+	*/
 	#dismiss(velocityAway) {
 		const _ = this;
 		_.#engine.setDismissVelocity(Math.max(0, velocityAway));
@@ -3013,7 +3041,9 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 			_.#engine.cancelGestureExit();
 			_.#engine.setDismissVelocity(0);
 			_.#settleBack();
+			return false;
 		}
+		return true;
 	}
 	/**
 	* Builds the profile the engine animates against.
