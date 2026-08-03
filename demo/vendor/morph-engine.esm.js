@@ -217,6 +217,7 @@ var MorphEngine = class extends EventEmitter {
 	#resolveRun = null;
 	#sourceElement = null;
 	#targetElement = null;
+	#heldSource = null;
 	#displayOverride = null;
 	#savedInline = /* @__PURE__ */ new Map();
 	#savedBodyOverflow = null;
@@ -309,6 +310,7 @@ var MorphEngine = class extends EventEmitter {
 		this.#sourceElement = from;
 		this.#targetElement = to;
 		this.#displayOverride = display;
+		this.restoreSource();
 		this.#saveInline(from);
 		this.#saveInline(to);
 		if (this.lockScroll) {
@@ -332,18 +334,29 @@ var MorphEngine = class extends EventEmitter {
 	}
 	/**
 	* Aborts any morph and restores both elements to their pre-show resting state.
+	*
+	* `restoreSource: false` makes this a transport HANDOFF rather than an abort:
+	* the blob goes, the target is restored and scroll unlocks, but the source
+	* stays hidden and keeps its `morphing` mark, because a morph does still own
+	* it. The caller is taking the flight over and calls `restoreSource()` when it
+	* is genuinely finished. Without the option a caller that only wants the blob
+	* gone has to re-hide the source itself in the same synchronous task, or the
+	* source flashes at full opacity for a frame — a timing invariant nothing can
+	* enforce from the outside.
+	* @param {Object} [options]
+	* @param {boolean} [options.restoreSource=true] - Restore the source now.
 	*/
-	stop() {
+	stop({ restoreSource = true } = {}) {
 		if (this.#state === "idle") return;
 		this.#supersede();
 		this.#spring.stop();
 		this.#removeBlob();
 		const source = this.#sourceElement;
 		const target = this.#targetElement;
-		if (source) {
+		if (source) if (restoreSource) {
 			this.#restoreInline(source);
 			source.removeAttribute("morphing");
-		}
+		} else this.#heldSource = source;
 		if (target) {
 			this.#restoreInline(target);
 			target.removeAttribute("morphing");
@@ -356,10 +369,27 @@ var MorphEngine = class extends EventEmitter {
 		this.emit("stop", { progress });
 	}
 	/**
+	* Restores a source element held back by `stop({ restoreSource: false })`.
+	*
+	* Idempotent, and harmless on a detached element. `show()` and `destroy()`
+	* call it so a held source can never leak into the next flight — one engine
+	* is routinely reused run after run.
+	* @returns {boolean} True when a held source was restored.
+	*/
+	restoreSource() {
+		const source = this.#heldSource;
+		if (!source) return false;
+		this.#heldSource = null;
+		this.#restoreInline(source);
+		source.removeAttribute("morphing");
+		return true;
+	}
+	/**
 	* Stops and removes all listeners. The engine is unusable afterwards.
 	*/
 	destroy() {
 		this.stop();
+		this.restoreSource();
 		this.#spring.removeAllListeners();
 		this.removeAllListeners();
 	}
