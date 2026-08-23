@@ -21,9 +21,9 @@
 ## Component Architecture
 
 - `<sheet-panel>` — breakpoint/profile policy, snap resolution, gesture ownership, profile morphing, dialog-panel delegation
-- `<sheet-header>` — rigid, unconditional drag surface
+- `<sheet-header>` — rigid, unconditional drag surface; owns the safe-area inset for a top sheet
 - `<sheet-content>` — elastic scroll region and conditional drag surface
-- `<sheet-footer>` — optional rigid drag surface and safe-area owner
+- `<sheet-footer>` — optional rigid drag surface and safe-area owner, except on a top sheet whose footer hangs away from the bottom edge
 
 Required nesting:
 
@@ -252,21 +252,22 @@ Two fixed traps: reusing `--sheet-progress` for the overlay lightened it on snap
 
 Side sheets are **fixed width at all times**, from `--sheet-active-size` (component fallback `min(26rem, 90vw)`); JS must not publish a snap-derived value into that token for a side profile. Side drags are binary dismiss-or-return `translateX`.
 
-Centred dialogs ignore `snap-points` and `mode`, take width from `--sheet-center-width`, and take **height from their own content**; `--sheet-active-size` is not published for them either — it is a width slot and a centre's size is a height. A desktop bottom profile is content-sized by exactly the same machinery: `contentSized(profile)` in `sheet-engine.js` (centre at any width, bottom past the breakpoint) is the one statement of which profiles those are, and it drives measurement AND the content-resize observer.
+Top sheets ignore `snap-points` and take **height from their own content** at every breakpoint. Centred dialogs ignore `snap-points` and `mode`, take width from `--sheet-center-width`, and take **height from their own content**; `--sheet-active-size` is not published for either — it is a width slot and both sizes are heights. A desktop bottom profile is content-sized by exactly the same machinery: `contentSized(profile)` in `sheet-engine.js` (top or centre at any width, bottom past the breakpoint) is the one statement of which profiles those are, and it drives measurement AND the content-resize observer.
 
 **No profile except a snap-resized bottom sheet may emit a size property in a keyframe.** `resizesWithSnaps(profile)` — `position === 'bottom' && !contentSized(profile)` — is that rule; `restStyles`, `awayTranslation`, `paintedExtent`, and the `willChange` hint all route through it, and tests assert it across profiles and tracks. Emitting a pixel `height` for a content-sized profile is self-defeating, not just redundant: it pins the box, `#measureBox` reads back its own last frame, and the `ResizeObserver` has nothing left to observe — which is why the fix lives at `restStyles`, not only in the stylesheet. A mobile bottom exit track is the one place a size is *pinned* rather than animated: both ends carry the painted height, so the run translates a constant-height box.
 
-Three orthogonal questions, three predicates — never answer any of them with `position === 'bottom'`:
+Four orthogonal questions, four named seams — never answer any of them with `position === 'bottom'`:
 
 | question | predicate |
 | --- | --- |
 | which axis does this profile travel on? | `dismissAxis(position)` |
+| which sign points away on that axis? | `awayOffset(position, x, y)` / `awayVector(position, distance)` |
 | does it resize, or only translate? | `resizesWithSnaps(profile)` |
 | where does its single size come from? | `contentSized(profile)` |
 
-`center` separates the first two (y-axis but translate-only); desktop bottom stops position answering resize at all. Every axis decision routes through `dismissAxis` (engine: `effectValues`, `awayOffset`; component: `#scrollChain`, `#dragMove`, `#matchesActiveAxis`); every resize decision through `resizesWithSnaps`. Slide *distance* is a third question again, owned by `slideInset`.
+`center` separates axis from resize (y-axis but translate-only); `top` separates axis from direction (y-axis toward smaller coordinates); desktop bottom stops position answering resize at all. Every axis decision routes through `dismissAxis` (engine: `effectValues`, `awayOffset`; component: `#scrollChain`, `#dragMove`, `#matchesActiveAxis`); every direction decision routes through `awayOffset`/`awayVector`, including both tail branches of `restStyles`; every resize decision through `resizesWithSnaps`. Slide *distance* is another question again, owned by `slideInset`.
 
-**A centred dialog must not use `height: auto`** — `inset: 0` pins both edges, and auto height with both pinned solves to *fill*; `margin: auto` only centres a definite height. `height: fit-content` gives both the size wanted and the precondition the auto margins need. `sheet-panel` opts out of its own `height: 100%` for both content-sized profiles for the same reason.
+**A centred dialog must not use `height: auto`** — `inset: 0` pins both edges, and auto height with both pinned solves to *fill*; `margin: auto` only centres a definite height. `height: fit-content` gives both the size wanted and the precondition the auto margins need. `sheet-panel` opts out of its own `height: 100%` for all three content-sized profiles (top, centre, and desktop bottom) for the same reason.
 
 The two bottom profiles disagree about exactly one declaration — `height` — so the stylesheet states it in two **mutually exclusive** selectors (`[data-position='bottom']:not([data-desktop='true'])` for the snap height, `[data-desktop='true'][data-position='bottom']` for `fit-content` + max-height cap) rather than declaring one and overriding it. Shared declarations stay in the shared rule.
 
@@ -290,7 +291,7 @@ That last rule is mouse-only by nature: touch/pen get implicit capture and alway
 
 ### Scroll claim policy
 
-`src/scroll-policy.js` is the single answer to "does the content scroll, or does the sheet move?" on the touch path — DOM-free, fed plain metric snapshots. The rule is stated in **finger space** on the dismiss axis, which makes it position-independent: content consumes while it can still scroll opposite-of-finger; the sheet claims when that room runs out. `fingerFromAway(position, away)` is the only away↔finger seam, and only `left` — the one profile dismissed toward smaller coordinates — inverts. It is a named, tested function because that line is exactly where the bug lived: per-profile hand-rolled branches mirrored the same edge error into each other.
+`src/scroll-policy.js` is the single answer to "does the content scroll, or does the sheet move?" on the touch path — DOM-free, fed plain metric snapshots. The rule is stated in **finger space** on the dismiss axis, which makes it position-independent: content consumes while it can still scroll opposite-of-finger; the sheet claims when that room runs out. `fingerFromAway(position, away)` is the only away↔finger seam. Left on x and top on y are the two profiles dismissed toward smaller coordinates, so both invert. It is a named, tested function because that line is exactly where the bug lived: per-profile hand-rolled branches mirrored the same edge error into each other.
 
 The unit is a scroll **chain**, not the content element: `#scrollChain()` walks from the gesture's target up to and including `sheet-content`, keeping nodes whose computed overflow on the dismiss axis is `auto`/`scroll`; any member with room answers for the chain, so a nested carousel scrolls natively and hands off at its own edge. The chain is snapshotted once at `pointerdown`; native scrolling that outruns it fires `pointercancel`, which abandons the drag anyway. Content passes the same overflow filter as every other node (admitting it unconditionally made an `overflow-x: hidden` consumer undismissable); an empty chain means the sheet claims.
 
@@ -318,7 +319,7 @@ Measuring this needs care, because **the observer is also the cure**: any docume
 
 This is sheet-specific. `dialog-panel` and `bottom-sheet` add no capture-phase scrim guard and close straight from the outside click, so neither was ever affected.
 
-The panel itself is the fifth drag surface, existing for one region: a side sheet's handle strip (its own `::before` in padding no child covers). It claims rigidly and takes `touch-action: none` for side positions. The trap is bubbling: child surfaces' `pointerdown` reaches the panel's DragGesture too, and merely ignoring callbacks would still capture at slop and starve the owning surface — `#dragStart` *refuses* any hit whose target is not the panel directly, via DragGesture's return-`false` seam (no capture, no further callbacks).
+The panel itself is the fifth drag surface, existing for one region: a side or top sheet's handle strip (its own `::before` in padding no child covers). It claims rigidly and takes `touch-action: pinch-zoom` for those positions. The trap is bubbling: child surfaces' `pointerdown` reaches the panel's DragGesture too, and merely ignoring callbacks would still capture at slop and starve the owning surface — `#dragStart` *refuses* any hit whose target is not the panel directly, via DragGesture's return-`false` seam (no capture, no further callbacks).
 
 Dismissal always enters through `panel.hide()` so cancelable `beforeHide`, focus restoration, Escape handling, and native dialog cleanup stay centralized. Gesture velocity is queued on SheetEngine before delegation.
 
@@ -328,9 +329,11 @@ Every claimed touch release emits `snaprelease` with `{ velocity, flick, directi
 
 ## Breakpoint and Snap Policy
 
-Below `breakpoint`, mobile attributes apply; a mobile bottom profile uses the full snap list. **At or above it the snap list is ignored entirely** — every desktop profile is dismiss-only with one resting size (sides: their CSS width; centre or desktop bottom: intrinsic content height). Left, right, and center ignore the snap list on mobile too.
+Below `breakpoint`, mobile attributes apply; a mobile bottom profile uses the full snap list. **At or above it the snap list is ignored entirely** — every desktop profile is dismiss-only with one resting size (sides: their CSS width; top, centre, or desktop bottom: intrinsic content height). Top, left, right, and center ignore the snap list on mobile too.
 
 Each desktop attribute falls back to its mobile twin, with **two** exceptions:
+
+`top` follows the ordinary rule and self-inherits; it does not participate in bottom's placement fallout. Its desktop effect therefore inherits `effect` (normally `slide`).
 
 - **`desktop-position` falls out to `center` when `position` is `bottom`.** Placement, not size — a floating card mid-screen reads as a desktop dialog. `desktop-position="bottom"` opts back in, still content-sized. Knock-on: `desktopEffect` answers `fade-scale` for desktop centre, so a plain bottom sheet fades on desktop rather than flying a viewport height.
 - **`desktopMode` inherits nothing — it hard-defaults to `card` for every position.** The getter never reads `mode`; `desktop-mode="edge"` welds it back. Do not describe the desktop attributes as uniformly inheriting.

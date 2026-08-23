@@ -1596,6 +1596,21 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
 						<span class="profile-row-action" aria-hidden="true">Open ›</span>
 					</button>
 
+					<button class="profile-row" data-open="search-overlay-panel" aria-label="Search overlay">
+						<span class="profile-row-compare">
+							<span class="profile-row-col">
+								<span class="profile-row-label">Mobile</span>
+								<span class="profile-row-value">Bottom search sheet</span>
+							</span>
+							<span class="profile-row-arrow" aria-hidden="true">→</span>
+							<span class="profile-row-col">
+								<span class="profile-row-label">Desktop</span>
+								<span class="profile-row-value">Top search card</span>
+							</span>
+						</span>
+						<span class="profile-row-action" aria-hidden="true">Open ›</span>
+					</button>
+
 					<button class="profile-row" data-open="confirm-panel" aria-label="Discard draft">
 						<span class="profile-row-compare">
 							<span class="profile-row-col">
@@ -1637,7 +1652,10 @@ sheet.addEventListener(<span class="hl-val">'snapchange'</span>, ({ detail }) =&
   <span class="hl-attr">desktop-exit-effect</span>=<span class="hl-val">"fade-scale"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
 
 <span class="hl-cm">// action sheet on a phone, centred modal on a desktop</span>
-&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">desktop-position</span>=<span class="hl-val">"center"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;</pre>
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">desktop-position</span>=<span class="hl-val">"center"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;
+
+<span class="hl-cm">// reachable bottom search on a phone, dropdown from the top on a desktop</span>
+&lt;<span class="hl-tag">sheet-panel</span> <span class="hl-attr">position</span>=<span class="hl-val">"bottom"</span> <span class="hl-attr">desktop-position</span>=<span class="hl-val">"top"</span> <span class="hl-attr">desktop-mode</span>=<span class="hl-val">"card"</span>&gt;…&lt;/<span class="hl-tag">sheet-panel</span>&gt;</pre>
 			</section>
 
 			<!-- ---- 04b · Display limit ---- -->
@@ -1837,6 +1855,14 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										type="button"
 										aria-pressed="false"
 										data-lab-group="position"
+										data-lab-value="top">
+										top
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="position"
 										data-lab-value="left">
 										left
 									</button>
@@ -1879,6 +1905,14 @@ panel.addEventListener(<span class="hl-val">'beforeShow'</span>, (event) =&gt; e
 										data-lab-group="desktop-position"
 										data-lab-value="bottom">
 										bottom
+									</button>
+									<button
+										class="seg-btn"
+										type="button"
+										aria-pressed="false"
+										data-lab-group="desktop-position"
+										data-lab-value="top">
+										top
 									</button>
 									<button
 										class="seg-btn"
@@ -2355,7 +2389,7 @@ sheet.hide();</pre>
 						<div>
 							Space-separated CSS lengths — <code>px</code>, <code>vh</code>, <code>dvh</code>,
 							<code>svh</code>, <code>lvh</code>, <code>vw</code>, <code>rem</code>, <code>%</code>.
-							<strong>Mobile bottom sheets only</strong>: ignored by left, right, and center
+							<strong>Mobile bottom sheets only</strong>: ignored by top, left, right, and center
 							positions, and ignored entirely at or above <code>breakpoint</code>. Resolved at open
 							and on resize.
 						</div>
@@ -2369,10 +2403,11 @@ sheet.hide();</pre>
 						<div><code>position</code></div>
 						<div><code>bottom</code></div>
 						<div>
-							Mobile placement: <code>bottom</code>, <code>left</code>, <code>right</code>, or
-							<code>center</code>. Center ignores <code>snap-points</code> and <code>mode</code>,
-							takes its width from <code>--sheet-center-width</code>, and takes its height from its
-							own content.
+							Mobile placement: <code>bottom</code>, <code>top</code>, <code>left</code>,
+							<code>right</code>, or <code>center</code>. Top is content-sized and ignores
+							<code>snap-points</code>. Center ignores <code>snap-points</code> and
+							<code>mode</code>, takes its width from <code>--sheet-center-width</code>, and takes
+							its height from its own content.
 						</div>
 					</div>
 					<div class="ref-row">
@@ -2411,14 +2446,15 @@ sheet.hide();</pre>
 							<code>center</code> for a <code>bottom</code> mobile position, else that position
 						</div>
 						<div>
-							Desktop placement: the same four values. A bottom sheet falls out to
+							Desktop placement: the same five values. A bottom sheet falls out to
 							<code>center</code> rather than inheriting itself, because a floating card in the
 							middle of the screen is what a desktop dialog reads as — say
 							<code>desktop-position="bottom"</code> to keep the bottom sheet, which then sizes to
 							its content and stays anchored to the bottom edge, capped by
 							<code>calc(100dvh - 2 * var(--sheet-card-margin))</code>. Center ignores
 							<code>snap-points</code> and <code>mode</code>, takes its width from
-							<code>--sheet-center-width</code>, and takes its height from its own content.
+							<code>--sheet-center-width</code>, and takes its height from its own content. Top
+							self-inherits, stays content-sized, and ignores <code>snap-points</code>.
 						</div>
 					</div>
 					<div class="ref-row">
@@ -2485,7 +2521,7 @@ sheet.hide();</pre>
 						<div>
 							The one fixed width of a left or right sheet, and the active snap height of a mobile
 							bottom sheet. Override it in CSS. Never published for a content-sized profile —
-							<code>center</code>, or a desktop <code>bottom</code>.
+							<code>top</code>, <code>center</code>, or a desktop <code>bottom</code>.
 						</div>
 					</div>
 					<div class="ref-row">
@@ -2525,12 +2561,12 @@ sheet.hide();</pre>
 					<div class="ref-row">
 						<div><code>--sheet-handle-width</code></div>
 						<div><code>50px</code></div>
-						<div>Bottom-sheet handle width.</div>
+						<div>Horizontal bottom/top-sheet handle width.</div>
 					</div>
 					<div class="ref-row">
 						<div><code>--sheet-handle-height</code></div>
 						<div><code>5px</code></div>
-						<div>Bottom-sheet handle height. Also its corner radius.</div>
+						<div>Horizontal bottom/top-sheet handle height. Also its corner radius.</div>
 					</div>
 					<div class="ref-row">
 						<div><code>--sheet-handle-side-length</code></div>
@@ -3317,7 +3353,65 @@ sheet.hide();</pre>
 			</dialog>
 		</dialog-panel>
 
-		<!-- 04 · action sheet on mobile, centred dialog on desktop.
+		<!-- 04b · reachable search sheet on mobile, content-sized top card on desktop -->
+		<dialog-panel id="search-overlay-panel">
+			<dialog aria-labelledby="search-overlay-title">
+				<sheet-panel
+					position="bottom"
+					snap-points="52vh 90vh"
+					initial-snap="0"
+					desktop-position="top"
+					desktop-mode="card">
+					<sheet-header>
+						<div class="sheet-header">
+							<h3 id="search-overlay-title">
+								<span class="sheet-eyebrow">bottom → top search</span>
+								Find anything
+							</h3>
+							<button class="close-btn" data-action-hide-dialog aria-label="Close">&times;</button>
+						</div>
+						<input
+							class="sheet-search"
+							type="search"
+							placeholder="Search products, pages, or help"
+							aria-label="Search products, pages, or help" />
+					</sheet-header>
+					<sheet-content>
+						<h4 class="section-label">Suggested results</h4>
+						<ul class="plain-list">
+							<li>
+								<span class="list-name">Merino Crew <span class="list-detail">Product</span></span>
+								<span class="list-meta">$148</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Order status <span class="list-detail">Help centre</span></span
+								>
+								<span class="list-meta">Guide</span>
+							</li>
+							<li>
+								<span class="list-name"
+									>Natural fibres <span class="list-detail">Collection</span></span
+								>
+								<span class="list-meta">24</span>
+							</li>
+							<li>
+								<span class="list-name">Returns <span class="list-detail">Policy</span></span>
+								<span class="list-meta">30 days</span>
+							</li>
+						</ul>
+						<div class="sheet-copy">
+							<p>
+								The phone profile stays within thumb reach. On desktop the same content drops from
+								the top, sizes to its results, and ignores the mobile snap list.
+							</p>
+						</div>
+					</sheet-content>
+				</sheet-panel>
+			</dialog>
+		</dialog-panel>
+
+		<!-- 04c · action sheet on mobile, centred dialog on desktop.
 		     Deliberately short content: a centred dialog is sized by what is inside
 		     it, so a long list would simply hit max-height and read as a full-height
 		     panel rather than as a modal. -->
@@ -3465,8 +3559,8 @@ sheet.hide();</pre>
 					<sheet-content>
 						<div class="sheet-copy">
 							<p>
-								Opacity from <code>0</code>, scale from <code>0.95</code>, no translation at all.
-								It appears where it belongs rather than travelling to get there.
+								Opacity from <code>0</code>, scale from <code>0.95</code>, no translation at all. It
+								appears where it belongs rather than travelling to get there.
 							</p>
 							<p>
 								A centred dialog uses this by default. Anything else inherits

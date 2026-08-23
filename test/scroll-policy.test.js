@@ -81,17 +81,19 @@ function claimFromFinger(position, chain, fingerDelta) {
 	return contentClaimDirection(chain, axis, position, away);
 }
 
-test('only a left sheet dismisses against its own axis, so only it inverts', () => {
-	// Dismissing each profile: fingers down, left, and right respectively. Every
-	// one of them is away-positive, and the finger sign they came from differs.
+test('left and top invert their dismiss axis', () => {
+	// Dismissing each profile: fingers down, up, left, and right respectively.
+	// Every one of them is away-positive, and the finger sign they came from differs.
 	assert.equal(fingerFromAway('bottom', 1), 1);
+	assert.equal(fingerFromAway('top', 1), -1);
 	assert.equal(fingerFromAway('left', 1), -1);
 	assert.equal(fingerFromAway('right', 1), 1);
 	// The inverse holds, and it round-trips awayOffset on the dismiss axis.
 	assert.equal(fingerFromAway('bottom', -1), -1);
+	assert.equal(fingerFromAway('top', -1), 1);
 	assert.equal(fingerFromAway('left', -1), 1);
 	assert.equal(fingerFromAway('right', -1), -1);
-	for (const position of ['bottom', 'left', 'right']) {
+	for (const position of ['bottom', 'top', 'left', 'right']) {
 		for (const finger of [-1, 1]) {
 			const away =
 				dismissAxis(position) === 'x'
@@ -112,6 +114,18 @@ test('a bottom sheet keeps scrolling under a finger moving up until the bottom e
 	assert.equal(contentConsumesTouch('bottom', [tallBox(0)], UP), true);
 	assert.equal(contentConsumesTouch('bottom', [tallBox(300)], UP), true);
 	assert.equal(contentConsumesTouch('bottom', [tallBox(600)], UP), false);
+});
+
+test('a top sheet keeps scrolling under a finger moving up until the bottom edge', () => {
+	assert.equal(contentConsumesTouch('top', [tallBox(0)], UP), true);
+	assert.equal(contentConsumesTouch('top', [tallBox(300)], UP), true);
+	assert.equal(contentConsumesTouch('top', [tallBox(600)], UP), false);
+});
+
+test('a top sheet keeps scrolling under a finger moving down until the top edge', () => {
+	assert.equal(contentConsumesTouch('top', [tallBox(300)], DOWN), true);
+	assert.equal(contentConsumesTouch('top', [tallBox(0.5)], DOWN), true);
+	assert.equal(contentConsumesTouch('top', [tallBox(0)], DOWN), false);
 });
 
 test('a left sheet keeps scrolling under a finger moving left until the RIGHT edge', () => {
@@ -144,7 +158,7 @@ test('a right sheet keeps scrolling under a finger moving left until the RIGHT e
 });
 
 test('content with nothing to scroll hands every finger direction to the sheet', () => {
-	for (const position of ['bottom', 'left', 'right']) {
+	for (const position of ['bottom', 'top', 'left', 'right']) {
 		for (const finger of [UP, DOWN, LEFT, RIGHT]) {
 			assert.equal(contentConsumesTouch(position, [rigidBox()], finger), false);
 		}
@@ -218,8 +232,15 @@ test('a right sheet claims each finger direction only at its matching scroll edg
 	assert.equal(claimFromFinger('right', [wideBox(600)], RIGHT), 0);
 });
 
+test('a top sheet claims each finger direction only at its matching scroll edge', () => {
+	assert.equal(claimFromFinger('top', [tallBox(0)], UP), 0);
+	assert.equal(claimFromFinger('top', [tallBox(0)], DOWN), -1);
+	assert.equal(claimFromFinger('top', [tallBox(600)], UP), 1);
+	assert.equal(claimFromFinger('top', [tallBox(600)], DOWN), 0);
+});
+
 test('empty content claims past slop with the live away sign for every edge', () => {
-	for (const position of ['bottom', 'left', 'right']) {
+	for (const position of ['bottom', 'top', 'left', 'right']) {
 		const axis = dismissAxis(position);
 		for (const offset of [-40, 40]) {
 			assert.equal(

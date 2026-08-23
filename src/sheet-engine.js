@@ -390,7 +390,7 @@ function dismissalZoneProgress(visibleExtent, restExtent) {
  * sliver of backdrop down the side. There is nothing to tune away there — a
  * synthetic frame past 100 would be collinear with the track and change nothing
  * — so the only fix is to refuse it.
- * @param {'bottom'|'left'|'right'|'center'} position - Sheet edge.
+ * @param {'bottom'|'top'|'left'|'right'|'center'} position - Sheet edge.
  * @param {number} p - Raw frame progress.
  * @param {string} [phase] - Motion phase; landed phases may extrapolate below 0.
  * @returns {number} Progress that may be painted and published.
@@ -405,34 +405,34 @@ function paintedProgress(position, p, phase) {
 /**
  * Axis a position is dismissed along.
  *
- * This is one of TWO orthogonal questions a position answers, and they are
- * deliberately kept apart:
+ * This is one of THREE orthogonal travel questions a position answers, and they
+ * are deliberately kept apart:
  *
  *   - which axis does this profile move on?  -> dismissAxis()
+ *   - which sign moves it away?               -> awayOffset()/awayVector()
  *   - does it resize, or only translate?     -> resizesWithSnaps()
  *
- * For bottom/left/right the two line up, which is why they were once tangled
- * together. `center` is the case that separates them: it travels on y like a
- * bottom sheet, but it is intrinsically sized and translates only, like a side
- * sheet. Every axis decision routes through here so that stays true.
- * @param {'bottom'|'left'|'right'|'center'} position - Sheet edge.
+ * `center` separates axis from resize: it travels on y like an edge sheet, but
+ * translates only. `top` separates axis from direction: it shares y with bottom
+ * but dismisses toward smaller coordinates. Every axis decision routes through
+ * here so those distinctions stay true.
+ * @param {'bottom'|'top'|'left'|'right'|'center'} position - Sheet edge.
  * @returns {'x'|'y'} Gesture axis.
  */
 function dismissAxis(position) {
-	return position === 'bottom' || position === 'center' ? 'y' : 'x';
+	return position === 'bottom' || position === 'top' || position === 'center' ? 'y' : 'x';
 }
 
 /**
  * Where a profile's single resting size comes from: its own laid-out content.
  *
- * Two profiles answer yes, and they answer it for the same reason — neither has
- * a length to read. A centred dialog rests against no edge at all, and a bottom
- * panel PAST THE BREAKPOINT is a desktop dialog that happens to sit on the
- * bottom edge: `snap-points` is a mobile-profile attribute and has no say up
- * there, so the only honest height is the one the content produces. The host
- * measures the laid-out box for both, and both need the content-resize
- * observer, because content is the one thing that changes a size nothing else
- * re-measures.
+ * Three profiles answer yes, and they answer it for the same reason — none has a
+ * length to read. A top panel and a centred dialog always take the height their
+ * content produces. A bottom panel PAST THE BREAKPOINT is a desktop dialog that
+ * happens to sit on the bottom edge: `snap-points` is a mobile-profile attribute
+ * and has no say up there. The host measures the laid-out box for all three, and
+ * all three need the content-resize observer, because content is the one thing
+ * that changes a size nothing else re-measures.
  *
  * A side sheet is neither: it is intrinsically sized too, but by a CSS token
  * (`--sheet-active-size`) rather than by its content, so it is probed instead
@@ -441,22 +441,22 @@ function dismissAxis(position) {
  * @returns {boolean} True when the resting size is the content's own.
  */
 function contentSized(profile) {
-	if (profile.position === 'center') return true;
+	if (profile.position === 'top' || profile.position === 'center') return true;
 	return profile.position === 'bottom' && !!profile.desktop;
 }
 
 /**
  * Does this profile RESIZE as it travels, or only translate?
  *
- * The second of the two orthogonal questions above, and the reason it is a
+ * The third of the orthogonal travel questions above, and the reason it is a
  * predicate rather than `position === 'bottom'`: only a *mobile* bottom profile
  * resizes. It is the one profile with a snap list, and painting a height is how
  * snap-to-snap travel is expressed.
  *
- * A desktop bottom profile is sized by its content, exactly like `center`, so it
- * must not emit a height at all. Emitting one is not merely redundant — it pins
- * the box in pixels, which makes the next measurement read back the number the
- * last frame wrote instead of the content's own height, and freezes the
+ * A top profile and a desktop bottom profile are sized by their content, exactly
+ * like `center`, so they must not emit a height at all. Emitting one is not
+ * merely redundant — it pins the box in pixels, which makes the next measurement
+ * read back the number the last frame wrote instead of the content's own height, and freezes the
  * ResizeObserver that watches for content changes. And an overshoot or an
  * upward rubber-band would stretch a content-sized panel past its content.
  * @param {Object} profile - Resolved visual profile.
@@ -470,15 +470,16 @@ function resizesWithSnaps(profile) {
  * Projects a *finger-motion* delta onto the dismiss direction.
  *
  * Positive results move the panel toward its off-screen edge: fingers down
- * dismisses a bottom sheet or a centered dialog, fingers left a left sheet,
- * fingers right a right sheet. Touch deltas are already finger motion, so
- * drags pass straight through.
- * @param {'bottom'|'left'|'right'|'center'} position - Sheet edge.
+ * dismiss a bottom sheet or a centered dialog, fingers up a top sheet, fingers
+ * left a left sheet, and fingers right a right sheet. Touch deltas are already
+ * finger motion, so drags pass straight through.
+ * @param {'bottom'|'top'|'left'|'right'|'center'} position - Sheet edge.
  * @param {number} deltaX - Horizontal finger delta or velocity.
  * @param {number} deltaY - Vertical finger delta or velocity.
  * @returns {number} Signed offset toward dismissal.
  */
 function awayOffset(position, deltaX, deltaY) {
+	if (position === 'top') return -deltaY;
 	if (dismissAxis(position) === 'y') return deltaY;
 	if (position === 'left') return -deltaX;
 	return deltaX;
@@ -489,13 +490,13 @@ function awayOffset(position, deltaX, deltaY) {
  * translate axes. `awayOffset(position, ...awayVector(position, d))` is `d`.
  *
  * Every frame that moves the panel toward or away from its edge goes through
- * here, so the axis choice and the left-hand sign flip are stated once.
- * @param {'bottom'|'left'|'right'|'center'} position - Sheet edge.
+ * here, so the axis choice and the top/left sign flips are stated once.
+ * @param {'bottom'|'top'|'left'|'right'|'center'} position - Sheet edge.
  * @param {number} distance - Away-signed distance in pixels.
  * @returns {{x: number, y: number}} Translate components.
  */
 function awayVector(position, distance) {
-	if (dismissAxis(position) === 'y') return { x: 0, y: distance };
+	if (dismissAxis(position) === 'y') return { x: 0, y: (position === 'top' ? -1 : 1) * distance };
 	return { x: (position === 'left' ? -1 : 1) * distance, y: 0 };
 }
 
@@ -505,7 +506,7 @@ function awayVector(position, distance) {
  * recomputing it from raw spring progress would lose the active effect's
  * geometry and put the backdrop's edge crossing on a different frame than the
  * panel's.
- * @param {'bottom'|'left'|'right'|'center'} position - Sheet edge.
+ * @param {'bottom'|'top'|'left'|'right'|'center'} position - Sheet edge.
  * @param {Object} styles - A style frame built by {@link styleFromValues}.
  * @returns {number} Translate magnitude toward the dismiss edge, in pixels.
  */
@@ -563,6 +564,7 @@ function transformOrigin(profile) {
 	if (profile.position === 'left') return 'left center';
 	if (profile.position === 'right') return 'right center';
 	if (profile.position === 'center') return 'center center';
+	if (profile.position === 'top') return 'center top';
 	return 'center bottom';
 }
 
@@ -572,12 +574,12 @@ function transformOrigin(profile) {
  * Snapped bottom sheets resize only at and above their lowest snap. Logical
  * travel below it holds the painted height at that floor and becomes translateY.
  *
- * Every other profile is intrinsically sized — a side sheet by its CSS width, a
- * centered dialog and a DESKTOP bottom panel by their content — so a size change
- * is expressed purely as translation and NO size property is ever emitted. Which
- * axis that translation lands on is dismissAxis's call, not this one's: center
- * and bottom travel on y, sides on x. `test/sheet-engine.test.js` pins the
- * no-size-property invariant.
+ * Every other profile is intrinsically sized — a side sheet by its CSS width,
+ * and a top panel, centered dialog, or DESKTOP bottom panel by their content —
+ * so a size change is expressed purely as translation and NO size property is
+ * ever emitted. Which axis that translation lands on is dismissAxis's call, not
+ * this one's: top, center, and bottom travel on y; sides on x.
+ * `test/sheet-engine.test.js` pins the no-size-property invariant.
  * @param {Object} profile - Resolved visual profile.
  * @param {number} size - Logical size in pixels along the dismiss axis.
  * @param {number} restSize - CSS resting size in pixels along the dismiss axis.
@@ -596,21 +598,15 @@ function restStyles(profile, size, restSize, lowestSize = 0) {
 	};
 	if (resizesWithSnaps(profile)) {
 		const paintedSize = Math.max(size, lowestSize);
-		const shift = Math.max(0, lowestSize - size);
+		const { x, y } = awayVector(profile.position, Math.max(0, lowestSize - size));
 		return {
 			...base,
 			height: `${paintedSize}px`,
-			transform: `translate3d(0px, ${shift}px, 0px) scale(1)`,
+			transform: `translate3d(${x}px, ${y}px, 0px) scale(1)`,
 		};
 	}
-	const shift = restSize - size;
-	if (dismissAxis(profile.position) === 'y') {
-		return { ...base, transform: `translate3d(0px, ${shift}px, 0px) scale(1)` };
-	}
-	return {
-		...base,
-		transform: `translate3d(${(profile.position === 'left' ? -1 : 1) * shift}px, 0px, 0px) scale(1)`,
-	};
+	const { x, y } = awayVector(profile.position, restSize - size);
+	return { ...base, transform: `translate3d(${x}px, ${y}px, 0px) scale(1)` };
 }
 
 /**

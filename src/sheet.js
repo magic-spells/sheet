@@ -19,7 +19,7 @@ import {
 import { contentClaimDirection, normalizeScrollLeft } from './scroll-policy.js';
 import { resolveInitialSnap, resolveSnapPoints, resolveSnapTarget } from './snap-points.js';
 
-const POSITIONS = new Set(['bottom', 'left', 'right', 'center']);
+const POSITIONS = new Set(['bottom', 'top', 'left', 'right', 'center']);
 const MODES = new Set(['edge', 'card']);
 const EFFECTS = new Set(['slide', 'fade-scale', 'slide-fade']);
 const PROFILE_ATTRIBUTES = new Set([
@@ -387,8 +387,7 @@ class SheetPanel extends HTMLElement {
 				// owns the state outright, so cancel it or the pending timer would wipe
 				// THIS press and wave through the retargeted click it exists to refuse.
 				_.#clearScrimPressTimer();
-				_.#scrimPress =
-					event.target === _.#dialogRef ? SCRIM_PRESS_SCRIM : SCRIM_PRESS_INSIDE;
+				_.#scrimPress = event.target === _.#dialogRef ? SCRIM_PRESS_SCRIM : SCRIM_PRESS_INSIDE;
 			},
 			// A pointerdown does NOT guarantee a click, and #outsideGuard's finally is
 			// the only thing that consumes one. Native scrolling inside the content
@@ -860,13 +859,13 @@ class SheetPanel extends HTMLElement {
 		reflectString(this, 'initial-snap', value);
 	}
 
-	/** @returns {'bottom'|'left'|'right'|'center'} Mobile sheet edge. */
+	/** @returns {'bottom'|'top'|'left'|'right'|'center'} Mobile sheet edge. */
 	get position() {
 		const value = this.getAttribute('position');
 		return POSITIONS.has(value) ? value : 'bottom';
 	}
 
-	/** @param {'bottom'|'left'|'right'|'center'} value - Mobile sheet edge. */
+	/** @param {'bottom'|'top'|'left'|'right'|'center'} value - Mobile sheet edge. */
 	set position(value) {
 		reflectString(this, 'position', value);
 	}
@@ -899,12 +898,12 @@ class SheetPanel extends HTMLElement {
 	 *
 	 * A bottom panel takes its height from a snap point (85vh by default), so on a
 	 * wide display a sheet holding one paragraph stands as a full-width slab of
-	 * mostly empty surface. `center` is the only profile that sizes to its own
-	 * content height, which is what a desktop dialog wants. Every other position
-	 * rests against an edge on any viewport and inherits itself unchanged.
+	 * mostly empty surface. `center` sizes to its own content height and sits where
+	 * a desktop dialog belongs. Every other position, including content-sized
+	 * `top`, rests against an edge on any viewport and inherits itself unchanged.
 	 *
 	 * Pass `desktop-position="bottom"` to opt back in.
-	 * @returns {'bottom'|'left'|'right'|'center'} Desktop sheet edge.
+	 * @returns {'bottom'|'top'|'left'|'right'|'center'} Desktop sheet edge.
 	 */
 	get desktopPosition() {
 		const value = this.getAttribute('desktop-position');
@@ -912,7 +911,7 @@ class SheetPanel extends HTMLElement {
 		return this.position === 'bottom' ? 'center' : this.position;
 	}
 
-	/** @param {'bottom'|'left'|'right'|'center'} value - Desktop sheet edge. */
+	/** @param {'bottom'|'top'|'left'|'right'|'center'} value - Desktop sheet edge. */
 	set desktopPosition(value) {
 		reflectString(this, 'desktop-position', value);
 	}
@@ -1110,8 +1109,8 @@ class SheetPanel extends HTMLElement {
 
 	#dragStart(surface, event) {
 		const _ = this;
-		// The panel surface exists for the side handle strip — the only region
-		// where the panel itself is the hit target. Every child surface's
+		// The panel surface exists for the side and top handle strips — the only
+		// regions where the panel itself is the hit target. Every child surface's
 		// pointerdown bubbles through the panel's gesture too, and it must be
 		// refused outright (not merely ignored): DragGesture would otherwise
 		// capture the pointer at slop and starve the surface that owns it.
@@ -1404,7 +1403,7 @@ class SheetPanel extends HTMLElement {
 			// One entry either way. A desktop bottom panel arrives here with its
 			// MEASURED content height rather than a snap: `snap-points` is a
 			// mobile-profile attribute and is ignored past the breakpoint, exactly
-			// as it is for center — see #measureSnaps and contentSized().
+			// as it is for top and center — see #measureSnaps and contentSized().
 			const desktopSize = snaps[snaps.length - 1];
 			_.#snaps = [desktopSize];
 			_.#engine.setSnaps(_.#snaps, 0);
@@ -1440,15 +1439,15 @@ class SheetPanel extends HTMLElement {
 
 	/**
 	 * Keeps a ResizeObserver on the dialog only while an open CONTENT-SIZED
-	 * profile is active — a centered dialog, or a bottom panel past the
-	 * breakpoint. Their resting height is their content's, so a content reflow
+	 * profile is active — a top panel, a centered dialog, or a bottom panel past
+	 * the breakpoint. Their resting height is their content's, so a content reflow
 	 * changes the extent every drag threshold and exit runway is computed from,
 	 * and nothing else re-measures while the panel simply sits open.
 	 *
-	 * This only works because neither profile lets the engine pin a pixel height:
-	 * `restStyles` emits a size property for a snap-resized bottom sheet alone, so
-	 * the dialog's own box genuinely tracks `height: fit-content` and the observer
-	 * has something to see. See resizesWithSnaps() in sheet-engine.js.
+	 * This only works because none of these profiles lets the engine pin a pixel
+	 * height: `restStyles` emits a size property for a snap-resized bottom sheet
+	 * alone, so the dialog's own box genuinely tracks `height: fit-content` and
+	 * the observer has something to see. See resizesWithSnaps() in sheet-engine.js.
 	 */
 	#syncContentObserver() {
 		const _ = this;
@@ -1496,8 +1495,8 @@ class SheetPanel extends HTMLElement {
 	 *
 	 * A snap-resized bottom sheet tracks the active snap height. Every other
 	 * profile leaves the token entirely to CSS: a side sheet's fallback supplies
-	 * its one fixed width, and a centered dialog — or a bottom panel past the
-	 * breakpoint — is sized by its own content through `height: fit-content`.
+	 * its one fixed width, and a top panel, centered dialog, or bottom panel past
+	 * the breakpoint is sized by its own content through `height: fit-content`.
 	 * Publishing a measured number for those would put a value in a slot nothing
 	 * reads, and for a side profile it would feed a height into a width slot.
 	 * @param {number} activeIndex - Active snap index.
@@ -1562,9 +1561,9 @@ class SheetPanel extends HTMLElement {
 	#measureSnaps(profile) {
 		const _ = this;
 		// A content-sized profile has no CSS token to probe — its dismiss extent
-		// has to come from the laid-out box itself. Two profiles land here for the
-		// same reason: a centered dialog, and a bottom panel past the breakpoint,
-		// where `snap-points` no longer applies at all.
+		// has to come from the laid-out box itself. Three profiles land here for the
+		// same reason: a top panel, a centered dialog, and a bottom panel past the
+		// breakpoint, where `snap-points` no longer applies at all.
 		if (contentSized(profile)) {
 			const height = _.#measureBox(profile).height;
 			return [height || window.innerHeight * 0.5];
