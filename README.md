@@ -1,6 +1,6 @@
 # @magic-spells/sheet
 
-**~22.9 kB** gzipped (`dist/sheet.min.js`, with dialog-panel and all three engines bundled) plus **~1.9 kB** for `dist/sheet.min.css`. The build measures both from the real artifacts into `demo/dist/sizes.json`, so the demo shows the exact figure.
+**~22.9 kB** gzipped (`dist/sheet.min.js`, with dialog-panel and all three engines bundled) plus **~2.0 kB** for `dist/sheet.min.css`. The build measures both from the real artifacts into `demo/dist/sizes.json`, so the demo shows the exact figure.
 
 Gesture-driven edge sheets and floating cards built on a real native `<dialog>` through `@magic-spells/dialog-panel`. This package adds spring motion, bottom-sheet snap points, drag/flick policy, and responsive presentation profiles.
 
