@@ -12,8 +12,8 @@
  *   fingerDelta > 0 (down, or right) → the scroll position must be able to SHRINK
  *
  * Nothing here knows which edge the sheet sits on. Touch deltas are already
- * finger motion. Writing the rule per profile instead is how the left and right
- * branches ended up mirrored into each other and stayed that way.
+ * finger motion. Writing the rule per profile instead is how the edge branches
+ * ended up mirrored into each other and stayed that way.
  *
  * Metrics are plain snapshots rather than live elements so the policy stays
  * DOM-free and node-testable.
@@ -29,17 +29,17 @@ const SCROLL_EDGE_TOLERANCE = 1;
  * Recovers finger motion from an away-signed drag direction.
  *
  * The inverse of sheet-engine's awayOffset on the dismiss axis, and the only
- * place the two spaces meet on the touch path. A left sheet is the one profile
- * dismissed toward SMALLER coordinates, so its away sign is the finger's
- * inverted; bottom and right already agree with their axis. Getting exactly
- * this backwards for one profile is the bug the shared policy exists to end, so
- * it is a named, tested function rather than a ternary at the call site.
- * @param {'bottom'|'left'|'right'} position - Sheet edge.
+ * place the two spaces meet on the touch path. Left on x and top on y are the two
+ * profiles dismissed toward SMALLER coordinates, so their away sign is the
+ * finger's inverted; bottom and right already agree with their axis. Getting
+ * exactly this backwards for one profile is the bug the shared policy exists to
+ * end, so it is a named, tested function rather than a ternary at the call site.
+ * @param {'bottom'|'top'|'left'|'right'|'center'} position - Sheet edge.
  * @param {number} awayDirection - Signed motion toward dismissal.
  * @returns {number} The same motion in finger space on the dismiss axis.
  */
 function fingerFromAway(position, awayDirection) {
-	return position === 'left' ? -awayDirection : awayDirection;
+	return position === 'left' || position === 'top' ? -awayDirection : awayDirection;
 }
 
 /**
@@ -120,7 +120,7 @@ const CLAIM_SLOP = 5;
  * latched first sample's.
  * @param {Object[]} chain - Scroll metrics, innermost first.
  * @param {'x'|'y'} axis - Dismiss axis.
- * @param {'bottom'|'left'|'right'|'center'} position - Sheet edge.
+ * @param {'bottom'|'top'|'left'|'right'|'center'} position - Sheet edge.
  * @param {number} awayOffset - Live away-signed offset on the dismiss axis.
  * @param {number} [slop=CLAIM_SLOP] - Minimum offset magnitude to claim.
  * @returns {number} Away-signed claim direction, or 0 to keep waiting.

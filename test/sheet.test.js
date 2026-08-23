@@ -1363,11 +1363,33 @@ elementTest('an unstated desktop position falls out to center only from bottom',
 	assert.equal(sheet.desktopPosition, 'bottom', 'the explicit opt-in still wins');
 	assert.equal(sheet.desktopEffect, 'slide', 'and it arrives the way the mobile profile does');
 	sheet.removeAttribute('desktop-position');
+	sheet.setAttribute('desktop-position', 'top');
+	assert.equal(sheet.desktopPosition, 'top');
+	assert.equal(
+		sheet.desktopEffect,
+		'slide',
+		'a bottom mobile sheet arriving at the desktop top edge inherits its slide'
+	);
+	sheet.removeAttribute('desktop-position');
 
-	for (const position of ['left', 'right', 'center']) {
+	for (const position of ['top', 'left', 'right', 'center']) {
 		sheet.setAttribute('position', position);
 		assert.equal(sheet.desktopPosition, position, `${position} inherits itself`);
 	}
+});
+
+elementTest('a top sheet measures its content box and never publishes --sheet-active-size', (t) => {
+	const { dialog, engine, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('position', 'top');
+	sheet.style.setProperty('--sheet-active-size', '999px');
+	dialog.style.setProperty('--sheet-active-size', '999px');
+
+	panel.fire('beforeShow');
+
+	assert.deepEqual(engine.snaps, [500], 'the dialog content height is the one resting size');
+	assert.equal(sheet.style.getPropertyValue('--sheet-active-size'), '');
+	assert.equal(dialog.style.getPropertyValue('--sheet-active-size'), '');
 });
 
 elementTest(

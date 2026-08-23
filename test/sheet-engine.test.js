@@ -539,13 +539,13 @@ test('SheetEngine clamps height at zero during negative drag overshoot', async (
 	engine.destroy();
 });
 
-// Bottom is the ONLY profile that paints a size. Side sheets are fixed width and
-// a centered dialog is sized by its content, so both express every size change as
-// translation. Center is included here deliberately: it shares the bottom sheet's
+// Bottom is the ONLY position that may paint a size. Side sheets are fixed width,
+// while top and center are sized by their content, so all express every size change
+// as translation. Center is included here deliberately: it shares the bottom sheet's
 // axis, and it would be an easy mistake to give it the bottom sheet's height track
 // along with it.
 test('non-resizing profiles never carry a size property', () => {
-	for (const position of ['left', 'right', 'center']) {
+	for (const position of ['top', 'left', 'right', 'center']) {
 		for (const effect of ['slide', 'fade-scale', 'slide-fade']) {
 			const profile = profileFor(position, { effect });
 			assertNoSizeProperties(buildOpenKeyframes(profile, 400, 400), `open ${position}/${effect}`);
@@ -553,6 +553,27 @@ test('non-resizing profiles never carry a size property', () => {
 		const profile = profileFor(position);
 		assertNoSizeProperties(buildDragKeyframes(profile, 400, 400, 400), `drag ${position}`);
 		assertNoSizeProperties(buildRestKeyframes(profile, 400, 250, 400), `rest ${position}`);
+	}
+});
+
+test('a top profile is content-sized at every breakpoint and never carries a size property', () => {
+	const mobile = profileFor('top');
+	const desktop = profileFor('top', { desktop: true });
+
+	assert.equal(contentSized(mobile), true);
+	assert.equal(contentSized(desktop), true);
+	assert.equal(resizesWithSnaps(mobile), false);
+	assert.equal(resizesWithSnaps(desktop), false);
+	assert.deepEqual(buildRestKeyframes(mobile, 400, 250, 400), {});
+
+	for (const effect of ['slide', 'fade-scale', 'slide-fade']) {
+		const profile = profileFor('top', { effect });
+		assertNoSizeProperties(buildOpenKeyframes(profile, 400, 400), `open top/${effect}`);
+		assertNoSizeProperties(
+			buildExitKeyframes(profile, 400, 400, 400, { effect }),
+			`exit top/${effect}`
+		);
+		assertNoSizeProperties(buildDragKeyframes(profile, 400, 400, 400), `drag top/${effect}`);
 	}
 });
 
@@ -617,8 +638,19 @@ test('a desktop bottom drag translates its content-sized box instead of resizing
 	assert.equal(awayTranslation(profileFor('bottom'), 120, 400, 400), 280);
 });
 
+test('a top resting track carries content upward while desktop bottom carries it downward', () => {
+	assert.equal(
+		buildDragKeyframes(profileFor('top'), 400, 400, 400)[0].transform,
+		'translate3d(0px, -400px, 0px) scale(1)'
+	);
+	assert.equal(
+		buildDragKeyframes(profileFor('bottom', { desktop: true }), 400, 400, 400)[0].transform,
+		'translate3d(0px, 400px, 0px) scale(1)'
+	);
+});
+
 test('entrance and exit tracks expose the same property keys for every profile and effect', () => {
-	for (const position of ['bottom', 'left', 'right', 'center']) {
+	for (const position of ['bottom', 'top', 'left', 'right', 'center']) {
 		for (const effect of ['slide', 'fade-scale', 'slide-fade']) {
 			const profile = profileFor(position, { effect });
 			const entrance = buildOpenKeyframes(profile, 400, 400, 200);
@@ -639,7 +671,7 @@ test('every track on every profile and effect carries a filter on every keyframe
 	// bends the track through it. Asserting presence per FRAME, not per track, is
 	// the point: a track whose ends carry filter and whose reveal frame does not
 	// passes any per-track check and still has the corner.
-	for (const position of ['bottom', 'left', 'right', 'center']) {
+	for (const position of ['bottom', 'top', 'left', 'right', 'center']) {
 		for (const effect of ['slide', 'fade-scale', 'slide-fade']) {
 			const profile = profileFor(position, { effect });
 			const tracks = {
@@ -713,6 +745,13 @@ test('the dismiss axis is independent of whether a profile resizes', () => {
 	assert.equal(awayOffset('center', 0, 40), awayOffset('bottom', 0, 40));
 
 	assert.equal(transformOrigin(profileFor('center')), 'center center');
+});
+
+test('a top sheet is the y-axis mirror of a left sheet', () => {
+	assert.equal(dismissAxis('top'), 'y');
+	assert.equal(awayOffset('top', 0, -60), 60);
+	assert.equal(awayOffset('top', 0, 40), -awayOffset('bottom', 0, 40));
+	assert.equal(transformOrigin(profileFor('top')), 'center top');
 });
 
 test('centre keyframes travel vertically and settle on the middle', () => {
@@ -1499,6 +1538,9 @@ test('slide exit distance is signed per position and only as long as it needs to
 	const bottom = buildOpenKeyframes(profileFor('bottom'), 500, 500);
 	assert.equal(bottom[0].transform, `translate3d(0px, ${edge(500)}px, 0px) scale(1)`);
 
+	const top = buildOpenKeyframes(profileFor('top'), 500, 500);
+	assert.equal(top[0].transform, `translate3d(0px, ${-edge(500)}px, 0px) scale(1)`);
+
 	// The regression this pins: a viewport-long runway left a small panel gone
 	// well before p reached 0, so the overlay lingered over an empty screen.
 	const roomy = buildOpenKeyframes(
@@ -1515,7 +1557,7 @@ test('slide exit distance is signed per position and only as long as it needs to
 
 test('a non-bottom exit starts at the exact capped drag pose', () => {
 	const restSize = 400;
-	for (const position of ['left', 'right', 'center']) {
+	for (const position of ['top', 'left', 'right', 'center']) {
 		const profile = profileFor(position);
 		for (const size of [restSize, restSize + 20]) {
 			const drag = new FrameEngine(buildDragKeyframes(profile, restSize, size, restSize));
@@ -1615,6 +1657,18 @@ test('every exit clears the screen by exactly one cushion, from rest and mid-dra
 				`${position}/${mode} exit continuing a drag is the same absolute pose`
 			);
 		}
+
+		const top = profileFor('top', { mode, edgeInset: inset });
+		assert.equal(
+			away('top', buildExitKeyframes(top, 400, 400)),
+			400 + inset + EXIT_CUSHION,
+			`top/${mode} exit from rest`
+		);
+		assert.equal(
+			away('top', buildExitKeyframes(top, 200, 400)),
+			400 + inset + EXIT_CUSHION,
+			`top/${mode} exit continuing a drag keeps its absolute pose`
+		);
 
 		const bottom = profileFor('bottom', { mode, edgeInset: inset });
 		assert.equal(
@@ -1830,7 +1884,7 @@ test('the opacity reveal frame stays collinear with the geometry', () => {
 	// transform track and blow up under spring overshoot, so the frame must
 	// carry the exact linear midpoint of the outer frames.
 	const parse = (transform) => transform.match(/-?\d+(\.\d+)?/g).map(Number);
-	for (const position of ['bottom', 'left', 'right']) {
+	for (const position of ['bottom', 'top', 'left', 'right']) {
 		for (const effect of ['fade-scale', 'slide-fade']) {
 			const keyframes = buildOpenKeyframes(profileFor(position, { effect }), 400, 400);
 			const percents = Object.keys(keyframes)
@@ -1853,6 +1907,7 @@ test('the opacity reveal frame stays collinear with the geometry', () => {
 
 test('cards scale from the edge they rest against', () => {
 	assert.equal(transformOrigin(profileFor('bottom', { mode: 'card' })), 'center bottom');
+	assert.equal(transformOrigin(profileFor('top', { mode: 'card' })), 'center top');
 	assert.equal(transformOrigin(profileFor('left', { mode: 'card' })), 'left center');
 	assert.equal(transformOrigin(profileFor('right', { mode: 'card' })), 'right center');
 });
@@ -2018,6 +2073,31 @@ test('settling from below the lowest snap starts translated and lands cleanly', 
 	engine.destroy();
 });
 
+test('a top sheet never paints past flush', async (t) => {
+	const frames = captureFrames(t);
+	const engine = new SheetEngine();
+	const dialog = makeDialog();
+	engine.setProfile(profileFor('top'));
+	engine.setSnaps([400], 0);
+	const show = engine.show({ to: dialog });
+	drainFrames(frames);
+	await show;
+
+	engine.dragBy(-120);
+	assert.ok(translateY(dialog) <= 0.001, `top drag overscroll stays flush (${translateY(dialog)})`);
+
+	const samples = [];
+	engine.on('change', () => samples.push(translateY(dialog)));
+	const settle = engine.returnToRest(-4);
+	drainFrames(frames);
+	await settle;
+	assert.ok(
+		samples.every((value) => value <= 0.001),
+		`top return never opens a gap above it (worst ${Math.max(...samples)})`
+	);
+	engine.destroy();
+});
+
 test('a side sheet never paints past flush', async (t) => {
 	// A side sheet is fixed width and sits against its edge, so there is no
 	// such thing as "further in than flush" — every position past p=1 opens a
@@ -2084,7 +2164,7 @@ test('paintedProgress states the paint rule once for both writers', () => {
 	assert.equal(paintedProgress('right', 1.024), 1, 'and so is a right sheet');
 	assert.equal(paintedProgress('right', 1), 1, 'flush itself is untouched');
 	assert.equal(paintedProgress('bottom', 1), 1);
-	for (const position of ['bottom', 'left', 'right']) {
+	for (const position of ['bottom', 'top', 'left', 'right']) {
 		assert.equal(paintedProgress(position, -0.4), 0, `${position} floors below the hidden frame`);
 		assert.equal(paintedProgress(position, 0), 0, `${position} keeps the hidden frame`);
 		assert.equal(paintedProgress(position, 0.5), 0.5, `${position} passes mid-travel through`);
@@ -2558,13 +2638,13 @@ test('an oscillating reversal never walks the exit backdrop forwards', async (t)
 	engine.destroy();
 });
 
-test('a side dismissal continues its drag pose without a backdrop jump', async (t) => {
+test('a non-bottom edge dismissal continues its drag pose without a backdrop jump', async (t) => {
 	// The exit keeps the drag keyframes and starts the spring where the finger
 	// left the panel, so #currentSize is frozen at the drag value for the whole
-	// flight. Unless the run is told the flight covers the resting width, the
+	// flight. Unless the run is told the flight covers the resting extent, the
 	// overlay computes currentSize * p / rest — p squared — and pops darker on
 	// the first frame while the panel has not moved at all.
-	for (const position of ['left', 'right']) {
+	for (const position of ['top', 'left', 'right']) {
 		const frames = captureFrames(t);
 		const engine = new SheetEngine();
 		const dialog = makeDialog();

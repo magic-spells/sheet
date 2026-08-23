@@ -9,6 +9,7 @@
   --sheet-handle-height: 5px;
   --sheet-handle-offset: 8px;
   --sheet-handle-inset: calc(var(--sheet-handle-offset) + var(--sheet-handle-height) + 8px);
+  --sheet-handle-bottom-inset: calc(var(--sheet-handle-offset) + var(--sheet-handle-height));
   --sheet-handle-side-thickness: 4px;
   --sheet-handle-side-length: var(--sheet-handle-width);
   --sheet-handle-side-inset: calc(var(--sheet-handle-offset) + var(--sheet-handle-side-thickness));
@@ -53,6 +54,15 @@ dialog-panel[morph][state]:has(sheet-panel[data-position="bottom"]) > dialog {
   inset: auto 0 0;
 }
 
+dialog-panel[morph][state]:has(sheet-panel[data-position="top"]) > dialog {
+  width: 100%;
+  height: fit-content;
+  padding-top: env(safe-area-inset-top, 0px);
+  border-radius: 0 0 var(--sheet-panel-border-radius) var(--sheet-panel-border-radius);
+  margin: 0;
+  inset: 0 0 auto;
+}
+
 dialog-panel[morph][state]:has(sheet-panel[data-position="bottom"]:not([data-desktop="true"])) > dialog {
   height: var(--sheet-active-size, 85vh);
 }
@@ -66,6 +76,14 @@ dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-position="b
 }
 
 dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-mode="card"][data-position="bottom"]) > dialog {
+  max-height: calc(100dvh - 2 * var(--sheet-card-margin));
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position="top"]:not([data-mode="card"])) > dialog {
+  max-height: 100dvh;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode="card"][data-position="top"]) > dialog {
   max-height: calc(100dvh - 2 * var(--sheet-card-margin));
 }
 
@@ -101,6 +119,10 @@ dialog-panel[morph][state]:has(sheet-panel[data-position="bottom"] sheet-footer)
   padding-bottom: 0;
 }
 
+dialog-panel[morph][state]:has(sheet-panel[data-position="top"] sheet-header) > dialog {
+  padding-top: 0;
+}
+
 dialog-panel[morph][state]:has(sheet-panel[data-position="left"] sheet-footer) > dialog {
   padding-left: 0;
 }
@@ -115,6 +137,14 @@ dialog-panel[morph][state]:has(sheet-panel[data-mode="card"][data-position="bott
   max-width: calc(100vw - 2 * var(--sheet-card-margin));
   border-radius: var(--sheet-card-border-radius);
   padding-bottom: 0;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode="card"][data-position="top"]) > dialog {
+  inset: var(--sheet-card-margin) var(--sheet-card-margin) auto;
+  width: auto;
+  max-width: calc(100vw - 2 * var(--sheet-card-margin));
+  border-radius: var(--sheet-card-border-radius);
+  padding-top: 0;
 }
 
 dialog-panel[morph][state]:has(sheet-panel[data-mode="card"][data-position="left"]) > dialog {
@@ -140,6 +170,11 @@ dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-mode="card"
   margin-inline: auto;
 }
 
+dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-mode="card"][data-position="top"]) > dialog {
+  width: var(--sheet-desktop-panel-width);
+  margin-inline: auto;
+}
+
 :is(dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-mode="card"][data-position="left"]) > dialog, dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-mode="card"][data-position="right"]) > dialog) {
   width: min(var(--sheet-active-size, var(--sheet-desktop-panel-width)),
 		var(--sheet-desktop-panel-width));
@@ -148,6 +183,11 @@ dialog-panel[morph][state]:has(sheet-panel[data-desktop="true"][data-mode="card"
 
 dialog-panel[morph][state]:has(sheet-panel[data-mode="edge"][data-position="bottom"]) > dialog {
   box-shadow: 0 var(--sheet-bleed) 0 0 var(--sheet-panel-background),
+		var(--sheet-panel-box-shadow);
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode="edge"][data-position="top"]) > dialog {
+  box-shadow: 0 calc(-1 * var(--sheet-bleed)) 0 0 var(--sheet-panel-background),
 		var(--sheet-panel-box-shadow);
 }
 
@@ -192,7 +232,7 @@ sheet-panel {
   overflow: hidden;
 }
 
-sheet-panel[data-position="center"], sheet-panel[data-desktop="true"][data-position="bottom"] {
+sheet-panel[data-position="top"], sheet-panel[data-position="center"], sheet-panel[data-desktop="true"][data-position="bottom"] {
   height: auto;
 }
 
@@ -224,8 +264,12 @@ sheet-panel[data-position="left"] sheet-header, sheet-panel[data-position="right
   padding-top: var(--sheet-content-padding);
 }
 
-sheet-panel[data-position="left"] sheet-header:before, sheet-panel[data-position="right"] sheet-header:before {
+sheet-panel[data-position="left"] sheet-header:before, sheet-panel[data-position="right"] sheet-header:before, sheet-panel[data-position="top"] sheet-header:before {
   content: none;
+}
+
+sheet-panel[data-position="top"] {
+  padding-bottom: var(--sheet-handle-bottom-inset);
 }
 
 sheet-panel[data-position="left"] {
@@ -236,7 +280,7 @@ sheet-panel[data-position="right"] {
   padding-left: var(--sheet-handle-side-inset);
 }
 
-sheet-panel[data-position="left"], sheet-panel[data-position="right"] {
+sheet-panel[data-position="left"], sheet-panel[data-position="right"], sheet-panel[data-position="top"] {
   touch-action: pinch-zoom;
 }
 
@@ -260,12 +304,29 @@ sheet-panel[data-position="right"]:before {
   left: var(--sheet-handle-offset);
 }
 
+sheet-panel[data-position="top"]:before {
+  content: "";
+  bottom: var(--sheet-handle-offset);
+  width: var(--sheet-handle-width);
+  height: var(--sheet-handle-height);
+  background: var(--sheet-handle-color);
+  border-radius: var(--sheet-handle-height);
+  pointer-events: none;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 sheet-panel[data-desktop="true"] sheet-header {
   padding-top: var(--sheet-content-padding);
 }
 
-sheet-panel[data-desktop="true"] sheet-header:before, sheet-panel[data-desktop="true"][data-position="left"]:before, sheet-panel[data-desktop="true"][data-position="right"]:before {
+sheet-panel[data-desktop="true"] sheet-header:before, sheet-panel[data-desktop="true"][data-position="left"]:before, sheet-panel[data-desktop="true"][data-position="right"]:before, sheet-panel[data-desktop="true"][data-position="top"]:before {
   content: none;
+}
+
+sheet-panel[data-desktop="true"][data-position="top"] {
+  padding-bottom: 0;
 }
 
 sheet-panel[data-desktop="true"][data-position="left"] {
@@ -281,8 +342,12 @@ sheet-panel[data-desktop="true"][data-position="right"] {
     padding-top: var(--sheet-content-padding);
   }
 
-  sheet-header:before, sheet-panel[data-position="left"]:before, sheet-panel[data-position="right"]:before {
+  sheet-header:before, sheet-panel[data-position="left"]:before, sheet-panel[data-position="right"]:before, sheet-panel[data-position="top"]:before {
     content: none;
+  }
+
+  sheet-panel[data-position="top"] {
+    padding-bottom: 0;
   }
 
   sheet-panel[data-position="left"] {
@@ -320,6 +385,10 @@ sheet-footer {
   padding-bottom: calc(var(--sheet-footer-padding) +
 			max(0px, env(safe-area-inset-bottom, 0px) - var(--_sheet-safe-float, 0px)));
   background: var(--sheet-footer-background);
+}
+
+sheet-panel[data-position="top"] sheet-footer {
+  padding-bottom: var(--sheet-footer-padding);
 }
 
 sheet-panel[data-position="left"] sheet-footer {
@@ -369,5 +438,10 @@ sheet-panel[data-position="right"] sheet-footer {
     --sheet-morph-duration: 0s;
     --sheet-trigger-return-duration: 0s;
   }
+}
+
+sheet-panel[data-position="top"] sheet-header {
+  padding-top: calc(var(--sheet-content-padding) +
+			max(0px, env(safe-area-inset-top, 0px) - var(--_sheet-safe-float, 0px)));
 }
 /*$vite$:1*/

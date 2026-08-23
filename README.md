@@ -8,7 +8,7 @@ Gesture-driven edge sheets and floating cards built on a real native `<dialog>` 
 
 ## Features
 
-- Bottom, left, and right edge sheets, plus a centered dialog profile
+- Bottom, top, left, and right edge sheets, plus a centered dialog profile
 - Inset card mode with independently configurable desktop presentation
 - Mobile-bottom-only CSS snap points, live dragging, nearest-snap release, and velocity flicks
 - Spring motion powered by `@magic-spells/physics-engine` and `@magic-spells/frame-engine`
@@ -142,6 +142,8 @@ While it runs, the trigger carries a `sheet-return` attribute — useful for dri
 
 At or above `breakpoint` the snap list is **ignored entirely**, whatever the profile. A desktop bottom panel measures its own content height, anchored to the bottom edge, capped by `calc(100dvh - 2 * var(--sheet-card-margin))` and scrolling inside itself past that. It is dismiss-only, like every desktop profile.
 
+A top sheet is content-sized on **every** viewport and ignores `snap-points`. Edge mode is capped at `100dvh`; card mode at `calc(100dvh - 2 * var(--sheet-card-margin))`. It moves with `translateY` and resolves only to open or dismissed, never publishing `--sheet-active-size` because that token is a width slot for side sheets.
+
 Left and right sheets ignore `snap-points` and always have one fixed width from `--sheet-active-size` (default `min(26rem, 90vw)`). Override the token in CSS:
 
 ```css
@@ -154,9 +156,10 @@ Side drags move the fixed-width panel with `translateX` and resolve only to open
 
 ## Gestures and Snap Rules
 
-The header and optional footer are unconditional drag surfaces, as is the panel's own handle strip — the padding a side sheet draws its pill into. The content hands a touch gesture to the sheet only once the scrollables under the pointer have no room left in that direction:
+The header and optional footer are unconditional drag surfaces, as is the panel's own handle strip — the padding a side or top sheet draws its pill into. The content hands a touch gesture to the sheet only once the scrollables under the pointer have no room left in that direction:
 
 - A bottom sheet claims downward motion at the content's top and upward motion at its bottom.
+- A top sheet claims upward motion at the content's bottom and downward motion at its top.
 - Left and right sheets use the corresponding horizontal scroll edge.
 - Nested scrollers count too: a horizontal carousel inside the content scrolls on its own until it reaches its edge, then the gesture passes to the sheet.
 - Once claimed, a non-passive `touchmove` veto keeps native scrolling from fighting the sheet.
@@ -173,7 +176,7 @@ For a mobile bottom sheet on release:
 - A slower release selects the nearest snap; the closed edge participates as a target below the lowest snap.
 - Cancelled gestures return to the active snap.
 
-Side sheets, centred dialogs, and a desktop bottom panel all release like a snapless bottom sheet: dismiss or return to their one resting size, with no nearest-snap search.
+Top and side sheets, centred dialogs, and a desktop bottom panel all release like a snapless bottom sheet: dismiss or return to their one resting size, with no nearest-snap search.
 
 ## Effects
 
@@ -244,21 +247,24 @@ This is what lets one element be two components:
 
 <!-- a bottom sheet on every viewport: 34vh on a phone, content-sized on a desktop -->
 <sheet-panel snap-points="34vh" desktop-position="bottom">…</sheet-panel>
+
+<!-- reachable bottom sheet on a phone, content-sized search panel from the top on desktop -->
+<sheet-panel snap-points="52vh 90vh" desktop-position="top" desktop-mode="card">…</sheet-panel>
 ```
 
-`center` is the fourth placement. It ignores `snap-points` and `mode` on **every** viewport, takes its width from `--sheet-center-width`, and its **height from its own content** — keep that content short if it should read as a modal. It is still swipe-dismissible downward; a non-dismissing release returns it to rest.
+`top` is content-sized and snapless on every viewport, self-inherits through `desktop-position`, and is swipe-dismissible upward. `center` is the fifth placement. It ignores `snap-points` and `mode` on **every** viewport, takes its width from `--sheet-center-width`, and its **height from its own content** — keep that content short if it should read as a modal. It is still swipe-dismissible downward; a non-dismissing release returns it to rest.
 
 | Attribute | Property | Default | Description |
 | --- | --- | --- | --- |
 | `snap-points` | `snapPoints` | `85vh` | **Mobile bottom only** — space-separated CSS heights, resolved at open and resize. Ignored past `breakpoint`, and by every non-bottom position |
 | `initial-snap` | `initialSnap` | last | Zero-based initial mobile bottom snap |
 | `morph-trigger` | `morphsFromTrigger` | absent | Grow out of the trigger passed to `show(trigger)` and shrink back into it on close. Opt-in; falls back to the spring entrance when there is no usable trigger |
-| `position` | `position` | `bottom` | Mobile placement: `bottom`, `left`, `right`, or `center` |
+| `position` | `position` | `bottom` | Mobile placement: `bottom`, `top`, `left`, `right`, or `center` |
 | `mode` | `mode` | `edge` | Mobile geometry: `edge` or `card`. Ignored by a `center` position on every viewport |
 | `effect` | `effect` | `slide` | Mobile motion effect |
 | `exit-effect` | `exitEffect` | `effect` | Mobile exit effect |
 | `breakpoint` | `breakpoint` | `768` | Desktop-profile threshold in pixels |
-| `desktop-position` | `desktopPosition` | `center` for a `bottom` mobile position, else the mobile position | Desktop placement, same four values. `bottom` here is content-sized and bottom-anchored, not snap-sized |
+| `desktop-position` | `desktopPosition` | `center` for a `bottom` mobile position, else the mobile position | Desktop placement, same five values. `bottom` here is content-sized and bottom-anchored, not snap-sized; `top` self-inherits |
 | `desktop-mode` | `desktopMode` | `card` | Desktop `edge` or `card`. Does **not** inherit `mode`. Ignored by a `center` desktop profile |
 | `desktop-effect` | `desktopEffect` | `fade-scale` for `center`, else `effect` | Desktop motion effect |
 | `desktop-exit-effect` | `desktopExitEffect` | `exit-effect`, else `desktop-effect` | Desktop exit effect |
@@ -304,15 +310,15 @@ Set tokens on `:root`, a panel, or another ancestor.
 
 | Property | Default | Description |
 | --- | --- | --- |
-| `--sheet-active-size` | `min(26rem, 90vw)` on sides | Single fixed width for left and right sheets, and the active snap height of a mobile bottom sheet. Never published for a content-sized profile — `center`, or a desktop `bottom` |
+| `--sheet-active-size` | `min(26rem, 90vw)` on sides | Single fixed width for left and right sheets, and the active snap height of a mobile bottom sheet. Never published for a content-sized profile — `top`, `center`, or a desktop `bottom` |
 | `--sheet-panel-background` | `white` | Panel background |
 | `--sheet-panel-border-radius` | `25px` | Edge-sheet exposed corner radius |
 | `--sheet-card-margin` | `12px` | Card inset from viewport edges |
 | `--sheet-card-border-radius` | `20px` | Card corner radius |
 | `--sheet-panel-box-shadow` | layered shadow | Panel elevation |
 | `--sheet-handle-color` | `#bbb` | Drag-handle fill. Handles render only on coarse-pointer devices, below the breakpoint |
-| `--sheet-handle-width` | `50px` | Bottom-sheet handle width |
-| `--sheet-handle-height` | `5px` | Bottom-sheet handle height |
+| `--sheet-handle-width` | `50px` | Horizontal bottom/top-sheet handle width |
+| `--sheet-handle-height` | `5px` | Horizontal bottom/top-sheet handle height |
 | `--sheet-handle-side-length` | `--sheet-handle-width` | Side-sheet handle length, running down the panel |
 | `--sheet-handle-side-thickness` | `4px` | Side-sheet handle thickness — a side sheet takes its pill from this pair, not the width/height above |
 | `--sheet-handle-offset` | `8px` | Handle distance from the header edge |
@@ -388,7 +394,7 @@ The `snaprelease` detail:
 
 | Field | Type | Value |
 | --- | --- | --- |
-| `velocity` | number | Release velocity in px/ms, projected onto the dismiss axis and **signed away from rest** — positive is toward the closed edge. A left sheet is the one that inverts |
+| `velocity` | number | Release velocity in px/ms, projected onto the dismiss axis and **signed away from rest** — positive is toward the closed edge. A left sheet and a top sheet are the two that invert |
 | `flick` | boolean | `Math.abs(velocity) > 0.5`, the same threshold the release policy uses |
 | `direction` | `'away'`, `'toward'`, `'none'` | The sign of `velocity` — **not** `up`/`down`/`left`/`right`, so `detail.direction === 'down'` silently never matches |
 | `size` | number | The panel's logical size in px along the dismiss axis at release |
