@@ -9,6 +9,9 @@
 	--sheet-handle-height: 5px;
 	--sheet-handle-offset: 8px;
 	--sheet-handle-inset: calc(var(--sheet-handle-offset) + var(--sheet-handle-height) + 8px);
+	/* A bottom-edge pill needs only its footprint; the header-style inset's extra
+	   breathing room would turn into lopsided padding below the content. */
+	--sheet-handle-bottom-inset: calc(var(--sheet-handle-offset) + var(--sheet-handle-height));
 	/* A side handle runs along a tall edge rather than across a short one, so it
 	   reads heavier at the same weight — it is drawn a little thinner. */
 	--sheet-handle-side-thickness: 4px;
@@ -89,6 +92,17 @@ dialog-panel[morph][state]:has(sheet-panel[data-position='bottom']) > dialog {
 	border-radius: var(--sheet-panel-border-radius) var(--sheet-panel-border-radius) 0 0;
 }
 
+/* Unlike bottom, top is content-sized at every breakpoint, so its two profiles
+   disagree about no height declaration. State fit-content once, unconditionally. */
+dialog-panel[morph][state]:has(sheet-panel[data-position='top']) > dialog {
+	inset: 0 0 auto;
+	width: 100%;
+	height: fit-content;
+	margin: 0;
+	padding-top: env(safe-area-inset-top, 0px);
+	border-radius: 0 0 var(--sheet-panel-border-radius) var(--sheet-panel-border-radius);
+}
+
 /* A bottom panel's HEIGHT is the one thing its two profiles genuinely disagree
    about, so it is stated CONDITIONALLY rather than declared once and overridden.
    Two rules that both set `height` on the same element would leave source order
@@ -134,6 +148,14 @@ dialog-panel[morph][state]:has(
 		sheet-panel[data-desktop='true'][data-mode='card'][data-position='bottom']
 	)
 	> dialog {
+	max-height: calc(100dvh - 2 * var(--sheet-card-margin));
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-position='top']:not([data-mode='card'])) > dialog {
+	max-height: 100dvh;
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode='card'][data-position='top']) > dialog {
 	max-height: calc(100dvh - 2 * var(--sheet-card-margin));
 }
 
@@ -197,6 +219,10 @@ dialog-panel[morph][state]:has(sheet-panel[data-position='bottom'] sheet-footer)
 	padding-bottom: 0;
 }
 
+dialog-panel[morph][state]:has(sheet-panel[data-position='top'] sheet-header) > dialog {
+	padding-top: 0;
+}
+
 dialog-panel[morph][state]:has(sheet-panel[data-position='left'] sheet-footer) > dialog {
 	padding-left: 0;
 }
@@ -210,6 +236,14 @@ dialog-panel[morph][state]:has(sheet-panel[data-mode='card'][data-position='bott
 	width: auto;
 	max-width: calc(100vw - 2 * var(--sheet-card-margin));
 	padding-bottom: 0;
+	border-radius: var(--sheet-card-border-radius);
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode='card'][data-position='top']) > dialog {
+	inset: var(--sheet-card-margin) var(--sheet-card-margin) auto;
+	width: auto;
+	max-width: calc(100vw - 2 * var(--sheet-card-margin));
+	padding-top: 0;
 	border-radius: var(--sheet-card-border-radius);
 }
 
@@ -240,6 +274,14 @@ dialog-panel[morph][state]:has(
 }
 
 dialog-panel[morph][state]:has(
+		sheet-panel[data-desktop='true'][data-mode='card'][data-position='top']
+	)
+	> dialog {
+	width: var(--sheet-desktop-panel-width);
+	margin-inline: auto;
+}
+
+dialog-panel[morph][state]:has(
 		sheet-panel[data-desktop='true'][data-mode='card'][data-position='left']
 	)
 	> dialog,
@@ -263,6 +305,12 @@ dialog-panel[morph][state]:has(
 dialog-panel[morph][state]:has(sheet-panel[data-mode='edge'][data-position='bottom']) > dialog {
 	box-shadow:
 		0 var(--sheet-bleed) 0 0 var(--sheet-panel-background),
+		var(--sheet-panel-box-shadow);
+}
+
+dialog-panel[morph][state]:has(sheet-panel[data-mode='edge'][data-position='top']) > dialog {
+	box-shadow:
+		0 calc(-1 * var(--sheet-bleed)) 0 0 var(--sheet-panel-background),
 		var(--sheet-panel-box-shadow);
 }
 
@@ -336,17 +384,18 @@ sheet-panel {
 	width: 100%;
 	height: 100%;
 	overflow: hidden;
-	/* Anchors a side sheet's handle, which is centred on the PANEL. */
+	/* Anchors side and top handles, which are centred on the PANEL. */
 	position: relative;
 }
 
-/* The two profiles whose height follows their content: a centred dialog at any
-   width, and a bottom panel past the breakpoint. `height: 100%` above resolves
+/* The three profiles whose height follows their content: a top or centred panel
+   at any width, and a bottom panel past the breakpoint. `height: 100%` above resolves
    against a dialog that is itself content-sized, which the flex layout then
    settles at max-height — so a two-line confirm filled the screen instead of
    reading as a modal. Opting out here lets the intrinsic height through; the
    dialog's own max-height still caps it, and `sheet-content` keeps
    `min-height: 0` so it scrolls once capped. */
+sheet-panel[data-position='top'],
 sheet-panel[data-position='center'],
 sheet-panel[data-desktop='true'][data-position='bottom'] {
 	height: auto;
@@ -372,7 +421,8 @@ sheet-header {
 }
 
 /* The handle sits on the edge the sheet is dragged toward: top-centre for a
-   bottom sheet, and vertically centred on the inner edge for a side sheet.
+   bottom sheet, bottom-centre for a top sheet, and vertically centred on the
+   inner edge for a side sheet.
    Keyed off data-position, which the component reflects from the resolved
    profile, so the desktop profile moves the handle too. */
 sheet-header::before {
@@ -398,8 +448,13 @@ sheet-panel[data-position='right'] sheet-header {
    it on the sheet centres it on the panel; the sheet then reserves that edge
    with its own padding so header, content and footer all clear it. */
 sheet-panel[data-position='left'] sheet-header::before,
-sheet-panel[data-position='right'] sheet-header::before {
+sheet-panel[data-position='right'] sheet-header::before,
+sheet-panel[data-position='top'] sheet-header::before {
 	content: none;
+}
+
+sheet-panel[data-position='top'] {
+	padding-bottom: var(--sheet-handle-bottom-inset);
 }
 
 sheet-panel[data-position='left'] {
@@ -418,7 +473,8 @@ sheet-panel[data-position='right'] {
    whose content is too short to scroll, so `none` here made the whole panel a
    region the page could not be enlarged in at all. */
 sheet-panel[data-position='left'],
-sheet-panel[data-position='right'] {
+sheet-panel[data-position='right'],
+sheet-panel[data-position='top'] {
 	touch-action: pinch-zoom;
 }
 
@@ -443,6 +499,19 @@ sheet-panel[data-position='right']::before {
 	left: var(--sheet-handle-offset);
 }
 
+sheet-panel[data-position='top']::before {
+	content: '';
+	position: absolute;
+	bottom: var(--sheet-handle-offset);
+	left: 50%;
+	width: var(--sheet-handle-width);
+	height: var(--sheet-handle-height);
+	background: var(--sheet-handle-color);
+	border-radius: var(--sheet-handle-height);
+	transform: translateX(-50%);
+	pointer-events: none;
+}
+
 /* The handle advertises touch travel — swipe-to-dismiss and snap spots — and
    the desktop profile has neither: no touch swipes, and a desktop bottom sheet
    is dismiss-only. So above the breakpoint the handle goes, along with every
@@ -454,8 +523,13 @@ sheet-panel[data-desktop='true'] sheet-header {
 
 sheet-panel[data-desktop='true'] sheet-header::before,
 sheet-panel[data-desktop='true'][data-position='left']::before,
-sheet-panel[data-desktop='true'][data-position='right']::before {
+sheet-panel[data-desktop='true'][data-position='right']::before,
+sheet-panel[data-desktop='true'][data-position='top']::before {
 	content: none;
+}
+
+sheet-panel[data-desktop='true'][data-position='top'] {
+	padding-bottom: 0;
 }
 
 sheet-panel[data-desktop='true'][data-position='left'] {
@@ -478,8 +552,13 @@ sheet-panel[data-desktop='true'][data-position='right'] {
 
 	sheet-header::before,
 	sheet-panel[data-position='left']::before,
-	sheet-panel[data-position='right']::before {
+	sheet-panel[data-position='right']::before,
+	sheet-panel[data-position='top']::before {
 		content: none;
+	}
+
+	sheet-panel[data-position='top'] {
+		padding-bottom: 0;
 	}
 
 	sheet-panel[data-position='left'] {
@@ -532,19 +611,29 @@ sheet-panel[data-position='center'] {
 
 sheet-footer {
 	padding: var(--sheet-footer-padding);
-	/* EVERY profile's footer is the bottom-most surface of a column-flex panel,
+	/* By default a profile's footer is the bottom-most surface of a column-flex panel,
 	   so it — not the dialog — is what stands between a button and the home
 	   indicator, whichever edge the sheet is dragged from. Keying this to the
 	   dismiss axis instead left a full-height side sheet reserving nothing at all
 	   in portrait, where safe-area-inset-left is 0, and dropped its footer
 	   buttons into the 34px band whose lower half the system swipe-up eats.
 	   Discounting the float is what stops a card measuring from the wrong edge: a
-	   card 12px above the screen needs 22px of a 34px inset, not all 34. */
+	   card 12px above the screen needs 22px of a 34px inset, not all 34. A top
+	   sheet is the exception because its footer normally hangs mid-screen; the
+	   rule immediately below resets it. */
 	padding-bottom: calc(
 		var(--sheet-footer-padding) +
 			max(0px, env(safe-area-inset-bottom, 0px) - var(--_sheet-safe-float, 0px))
 	);
 	background: var(--sheet-footer-background);
+}
+
+/* A top sheet's footer normally hangs mid-screen, so it must not reserve the
+   bottom safe area. At the 100dvh cap the footer can reach the bottom edge and
+   this under-reserves; `max-height: calc(100dvh - env(safe-area-inset-bottom))`
+   would avoid that trade-off, but is deliberately not shipped. */
+sheet-panel[data-position='top'] sheet-footer {
+	padding-bottom: var(--sheet-footer-padding);
 }
 
 /* The dismiss-axis inset a side sheet needs on top of the bottom one above.
@@ -636,4 +725,13 @@ sheet-panel[data-position='right']:has(sheet-footer) sheet-content {
 		--sheet-morph-duration: 0ms;
 		--sheet-trigger-return-duration: 0ms;
 	}
+}
+
+/* Keep this last. The desktop header rule has identical specificity, so source
+   order is what lets a top sheet's header own the safe-area inset. */
+sheet-panel[data-position='top'] sheet-header {
+	padding-top: calc(
+		var(--sheet-content-padding) +
+			max(0px, env(safe-area-inset-top, 0px) - var(--_sheet-safe-float, 0px))
+	);
 }

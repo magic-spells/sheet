@@ -1,6 +1,6 @@
 {
 	"name": "@magic-spells/sheet",
-	"version": "0.1.1",
+	"version": "0.2.0",
 	"description": "Gesture-driven dialog sheets with spring physics, snap points, edge and card profiles.",
 	"author": "Cory Schulz",
 	"license": "MIT",
@@ -55,11 +55,11 @@
 		"@magic-spells/physics-engine": "^1.0.0"
 	},
 	"peerDependencies": {
-		"@magic-spells/dialog-panel": "^2.0.1"
+		"@magic-spells/dialog-panel": "^2.0.2"
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.38.0",
-		"@magic-spells/dialog-panel": "^2.0.1",
+		"@magic-spells/dialog-panel": "^2.0.2",
 		"@magic-spells/vite-plugin-live-reload": "^0.1.0",
 		"eslint": "^9.38.0",
 		"globals": "^15.15.0",

@@ -1363,11 +1363,33 @@ elementTest('an unstated desktop position falls out to center only from bottom',
 	assert.equal(sheet.desktopPosition, 'bottom', 'the explicit opt-in still wins');
 	assert.equal(sheet.desktopEffect, 'slide', 'and it arrives the way the mobile profile does');
 	sheet.removeAttribute('desktop-position');
+	sheet.setAttribute('desktop-position', 'top');
+	assert.equal(sheet.desktopPosition, 'top');
+	assert.equal(
+		sheet.desktopEffect,
+		'slide',
+		'a bottom mobile sheet arriving at the desktop top edge inherits its slide'
+	);
+	sheet.removeAttribute('desktop-position');
 
-	for (const position of ['left', 'right', 'center']) {
+	for (const position of ['top', 'left', 'right', 'center']) {
 		sheet.setAttribute('position', position);
 		assert.equal(sheet.desktopPosition, position, `${position} inherits itself`);
 	}
+});
+
+elementTest('a top sheet measures its content box and never publishes --sheet-active-size', (t) => {
+	const { dialog, engine, panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	sheet.setAttribute('position', 'top');
+	sheet.style.setProperty('--sheet-active-size', '999px');
+	dialog.style.setProperty('--sheet-active-size', '999px');
+
+	panel.fire('beforeShow');
+
+	assert.deepEqual(engine.snaps, [500], 'the dialog content height is the one resting size');
+	assert.equal(sheet.style.getPropertyValue('--sheet-active-size'), '');
+	assert.equal(dialog.style.getPropertyValue('--sheet-active-size'), '');
 });
 
 elementTest(
@@ -1620,19 +1642,150 @@ function scrimGesture(panel, pressTarget, release) {
 	return click.propagationStopped;
 }
 
+// A press on panel content that releases on the scrim fires its click on the
+// DIALOG — the nearest common ancestor of press and release — at the release
+// coordinates, so by target and geometry it is a scrim tap. Only the press
+// position tells them apart, and this is the one case the guard still owns:
+// dialog-panel's own gate cannot see it, because the target really is the
+// dialog. (The pointer-capture variant, whose click is retargeted to the
+// captor inside the panel, is covered below — the guard no longer needs to
+// stop that one.)
 elementTest('a press on panel content that releases on the scrim is not a tap', (t) => {
 	const { dialog, panel, sheet } = makeSheet();
 	t.after(() => sheet.disconnectedCallback());
 	const content = new StubElement('sheet-content');
 
-	// The bug this guards: pointer capture retargets the click to whatever held
-	// it — inside the panel — while dialog-panel's dialogClick only ever tests
-	// the release COORDINATES, which are out on the scrim. Selecting text and
-	// letting go past the edge closed the sheet.
-	assert.equal(scrimGesture(panel, content, { clientX: 200, clientY: -80 }), true);
+	panel.fire('pointerdown', { target: content });
+	const release = panel.fire('click', { target: dialog, detail: 1, clientX: 200, clientY: -80 });
+	assert.equal(release.propagationStopped, true);
 
 	// A genuine scrim tap is untouched: same release point, gesture began there.
 	assert.equal(scrimGesture(panel, dialog, { clientX: 200, clientY: -80 }), false);
+});
+
+// The guard runs in the capture phase on the dialog-panel, so a click it stops
+// never reaches its own target. Judged by geometry alone, a descendant painted
+// outside the dialog's box — a position: fixed child, a nested full-screen
+// lightbox's close button, arrows, or scrim — read as a scrim tap, and under a
+// refusing policy (dismiss without `backdrop`, or a press that began inside)
+// the guard swallowed the click before the control ever saw it. A descendant
+// target is never a scrim tap, whatever its coordinates.
+elementTest('a descendant click outside the rect is left alone under every policy', (t) => {
+	const { panel, sheet } = makeSheet();
+	t.after(() => sheet.disconnectedCallback());
+	const closeButton = new StubElement('button');
+	const outside = { clientX: 200, clientY: -80 };
+
+	// Backdrop dismissal forbidden outright.
+	sheet.setAttribute('dismiss', 'swipe escape');
+	assert.equal(sheet.dismissPolicy.backdrop, false);
+	assert.equal(scrimGesture(panel, closeButton, outside), false, 'dismiss policy');
+
+	// Press began inside, which refuses a dialog-targeted release.
+	sheet.setAttribute('dismiss', 'none');
+	assert.equal(scrimGesture(panel, closeButton, outside), false, 'dismiss="none"');
+
+	// No pointer sequence at all, the iOS shape, still a descendant target.
+	sheet.removeAttribute('dismiss');
+	const bare = panel.fire('click', { target: closeButton, detail: 1, ...outside });
+	assert.equal(bare.propagationStopped, false, 'no preceding press');
+});
+
+/**
+ * The real dialog-panel, from the build under node_modules, mounted on the
+ * same stub dialog the sheet reads. Its `dialogClick` is bound on that dialog,
+ * so firing a click there exercises dialog-panel's own backdrop gate rather
+ * than a stand-in for it — the sheet now relies on that gate to make the
+ * pointer-capture release a no-op, so the test has to run against it.
+ * @param {Object} dialog - dialog stub.
+ * @returns {Object} A connected DialogPanel whose hide() is counted, not run.
+ */
+function realDialogPanel(dialog) {
+	const DialogPanel = customElements.get('dialog-panel');
+	const panel = new DialogPanel();
+	panel.queryResults.set('dialog', dialog);
+	panel.queryResults.set('dialog-backdrop', new StubElement('dialog-backdrop'));
+	panel.connectedCallback();
+	panel.hideCalls = 0;
+	panel.hide = () => {
+		panel.hideCalls++;
+		return true;
+	};
+	return panel;
+}
+
+/**
+ * Walks a click through both halves of the backdrop decision the way the
+ * browser does: the sheet's capture-phase guard on the dialog-panel first, and
+ * only if that let it propagate, dialog-panel's bubble-phase dialogClick on the
+ * dialog. The stub dispatches to one node, so the two hops are explicit.
+ * @param {Object} panel - Real dialog-panel with the sheet's guard bound.
+ * @param {Object} dialog - dialog stub dialog-panel listens on.
+ * @param {Object} init - Click init: target and release coordinates.
+ * @returns {{ stopped: boolean, hides: number }}
+ */
+function clickThrough(panel, dialog, init) {
+	const before = panel.hideCalls;
+	const click = { detail: 1, ...init };
+	const captured = panel.fire('click', click);
+	if (!captured.propagationStopped) dialog.fire('click', click);
+	return { stopped: captured.propagationStopped, hides: panel.hideCalls - before };
+}
+
+elementTest('dialog-panel 2.0.2 is the floor: its dialogClick gates on target', () => {
+	const DialogPanel = customElements.get('dialog-panel');
+	assert.equal(typeof DialogPanel, 'function');
+	const dialog = new StubElement('dialog');
+	dialog.rect = { top: 0, left: 0, right: 400, bottom: 500, width: 400, height: 500 };
+	const panel = realDialogPanel(dialog);
+	const outside = { detail: 1, clientX: 200, clientY: -80 };
+
+	dialog.fire('click', { target: new StubElement('button'), ...outside });
+	assert.equal(panel.hideCalls, 0, 'a descendant target is never a backdrop click');
+
+	dialog.fire('click', { target: dialog, ...outside });
+	assert.equal(panel.hideCalls, 1, 'a dialog target outside the rect is');
+});
+
+// The release the guard used to have to catch by geometry: a drag that began
+// on panel content and held pointer capture releases on the scrim with its
+// click retargeted to the captor, inside the panel. The guard now waves it
+// through — and dialog-panel's own target gate is what keeps the sheet open.
+elementTest('a retargeted inside-press release on the scrim still does not dismiss', (t) => {
+	const dialog = new StubElement('dialog');
+	dialog.rect = { top: 0, left: 0, right: 400, bottom: 500, width: 400, height: 500 };
+	const panel = realDialogPanel(dialog);
+	const sheet = new SheetPanel();
+	sheet.closestResults.set('dialog-panel', panel);
+	sheet.closestResults.set('dialog', dialog);
+	sheet.connectedCallback();
+	t.after(() => sheet.disconnectedCallback());
+	const content = new StubElement('sheet-content');
+
+	panel.fire('pointerdown', { target: content });
+	const release = clickThrough(panel, dialog, { target: content, clientX: 200, clientY: -80 });
+	assert.deepEqual(release, { stopped: false, hides: 0 });
+
+	// The same drag released without capture lands on the dialog: the guard
+	// stops it before dialog-panel, which would otherwise read it as a tap.
+	panel.fire('pointerdown', { target: content });
+	const common = clickThrough(panel, dialog, { target: dialog, clientX: 200, clientY: -80 });
+	assert.deepEqual(common, { stopped: true, hides: 0 });
+
+	// A genuine scrim tap: target is the dialog, press began there, policy allows.
+	panel.fire('pointerdown', { target: dialog });
+	const tap = clickThrough(panel, dialog, { target: dialog, clientX: 200, clientY: -80 });
+	assert.deepEqual(tap, { stopped: false, hides: 1 });
+
+	// The iOS shape — a bare click with no pointer sequence — is the same tap.
+	const bare = clickThrough(panel, dialog, { target: dialog, clientX: 200, clientY: -80 });
+	assert.deepEqual(bare, { stopped: false, hides: 1 });
+
+	// And a descendant painted out on the scrim, with backdrop dismissal off,
+	// keeps its click and keeps the sheet open.
+	sheet.setAttribute('dismiss', 'none');
+	const lightbox = clickThrough(panel, dialog, { target: content, clientX: 200, clientY: -80 });
+	assert.deepEqual(lightbox, { stopped: false, hides: 0 });
 });
 
 elementTest('a swipe that begins on the scrim still dismisses however far it travels', (t) => {
@@ -1646,13 +1799,15 @@ elementTest('a swipe that begins on the scrim still dismisses however far it tra
 });
 
 elementTest('an ordinary click inside the panel box never reaches the guard', (t) => {
-	const { panel, sheet } = makeSheet();
+	const { dialog, panel, sheet } = makeSheet();
 	t.after(() => sheet.disconnectedCallback());
 	const button = new StubElement('button');
 
-	// Inside the rect, so the geometry test returns before any policy question.
-	// Dropping the old target-based exemption must not start swallowing these.
+	// A descendant target returns at the target gate, and even a click on the
+	// dialog itself inside the rect returns at geometry, before any policy
+	// question. Neither may start swallowing ordinary clicks.
 	assert.equal(scrimGesture(panel, button, { clientX: 200, clientY: 250 }), false);
+	assert.equal(scrimGesture(panel, dialog, { clientX: 200, clientY: 250 }), false);
 });
 
 elementTest('dismiss="none" still refuses a scrim tap it would otherwise allow', (t) => {
