@@ -451,14 +451,35 @@ class SheetPanel extends HTMLElement {
 						}, 0);
 						return;
 					}
-					// Geometry, not target, and that is load-bearing in BOTH directions.
-					// The native ::backdrop reports the dialog itself as its target, so a
-					// scrim tap can only be recognised by position — the same test
-					// dialog-panel uses, deliberately. And a drag that began on panel
-					// content arrives retargeted to whatever held pointer capture, which
-					// is inside the panel, so a target-based exemption would wave through
-					// the exact release this guard exists to catch. Every ordinary pointer
-					// click on panel content lands inside the rect and returns here.
+					// Target first, then geometry, and each answers a different question.
+					//
+					// A descendant target is never a scrim tap, whatever its coordinates.
+					// A position: fixed child, a nested full-viewport lightbox's close
+					// button or arrows, a popover anchored past the edge — all paint
+					// OUTSIDE the dialog's box, and this guard runs in the capture phase,
+					// so stopping their click here killed it before it ever reached its
+					// own target. Returning lets it reach the control and bubble on;
+					// dialog-panel ≥ 2.0.2 applies this same target gate in its own
+					// dialogClick, so the bubble is a no-op for dismissal there too.
+					//
+					// That is also why a target exemption is safe NOW and was not before.
+					// A drag that began on panel content and held pointer capture
+					// releases with its click retargeted to the captor, inside the
+					// panel, at scrim coordinates. Before 2.0.2 dialog-panel judged that
+					// click by coordinates alone and hid the sheet, so this guard had to
+					// stop it, and only geometry could see it. With the target gate on
+					// both sides that release cannot dismiss anything, and there is
+					// nothing left for geometry to catch.
+					if (event.target !== _.#dialogRef) return;
+					// Geometry is still the only test for the click that remains. The
+					// native ::backdrop has no node, so a genuine scrim tap is dispatched
+					// on the dialog itself, and so is a click on the dialog's own padding
+					// — position is what separates them, the same rect test dialog-panel
+					// uses, deliberately. And a press on panel content that releases on
+					// the scrim WITHOUT pointer capture (selecting text with a mouse)
+					// fires its click on the common ancestor, which is again the dialog,
+					// at outside coordinates: target and rect both read as a scrim tap,
+					// and only #scrimPress tells that release from one.
 					const rect = _.#dialogRef.getBoundingClientRect();
 					const outside =
 						event.clientX < rect.left ||

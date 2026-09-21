@@ -167,7 +167,7 @@ The header and optional footer are unconditional drag surfaces, as is the panel'
 
 **The scrim is not a drag surface.** `showModal()` makes everything outside the dialog inert and the native `::backdrop` wins every hit test in the dim region, so `<dialog-backdrop>` is a paint surface (scrim fill, blur, opacity) and never an event target. Pressing the dim area and pulling moves nothing.
 
-Clicking it does dismiss, subject to `dismiss`, and the rule is geometric rather than timed: the `pointerdown` must have landed on the scrim, and the click must fall outside the dialog's rect. A long slow drag that began on the scrim still closes the sheet; a text selection that began on content and released on the scrim does not. Where the gesture began answers both; how far it travelled answers neither.
+Clicking it does dismiss, subject to `dismiss`, and the rule is geometric rather than timed: the click must target the dialog itself (a `::backdrop` click always does, since the backdrop has no node of its own), the `pointerdown` must have landed on the scrim, and the click must fall outside the dialog's rect. A long slow drag that began on the scrim still closes the sheet; a text selection that began on content and released on the scrim does not. Where the gesture began answers both; how far it travelled answers neither. A click on something *inside* the sheet that happens to paint outside its box — a fixed-position child, a nested full-screen lightbox's close button — is never a scrim click and is left entirely alone, whatever `dismiss` says. That needs `@magic-spells/dialog-panel` 2.0.2 or later, which applies the same target rule on its side.
 
 For a mobile bottom sheet on release:
 
