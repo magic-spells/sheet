@@ -1,6 +1,6 @@
 {
 	"name": "@magic-spells/sheet",
-	"version": "0.2.1",
+	"version": "0.2.0",
 	"description": "Gesture-driven dialog sheets with spring physics, snap points, edge and card profiles.",
 	"author": "Cory Schulz",
 	"license": "MIT",
