@@ -2569,6 +2569,7 @@ var SheetPanel = class SheetPanel extends HTMLElement {
 						}, 0);
 						return;
 					}
+					if (event.target !== _.#dialogRef) return;
 					const rect = _.#dialogRef.getBoundingClientRect();
 					if (!(event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) return;
 					if (!_.dismissPolicy.backdrop || _.#scrimPress === SCRIM_PRESS_INSIDE) event.stopPropagation();
